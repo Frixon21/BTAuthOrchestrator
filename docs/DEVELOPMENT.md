@@ -342,6 +342,27 @@ does not modify their permissions or ownership automatically. A lock left after
 an unclean process termination must be removed manually after confirming no
 other service process is using the directory.
 
+## Console monitoring
+
+The running service (TASK-023, `src/logging.ts`) prefixes every console line
+with an ISO timestamp, a level (`INFO`/`WARN`/`ERROR`), and, while handling a
+request, an 8-character request id. Each completed request logs one summary
+line, `METHOD /path -> status (duration)`, at `ERROR` for 5xx, `WARN` for 4xx,
+and `INFO` otherwise; successful `GET /health` checks are not logged. Query
+strings are never logged (`/auth/callback` carries the OAuth `code`/`state`).
+To trace a 5xx, find its summary line and read the earlier lines with the same
+request id: unexpected-failure paths log a stack trace, and all error log
+lines include the error `code` and full `cause` chain (Node's `fetch` reports
+only "fetch failed" and puts the DNS/TLS/connection reason in `cause`).
+
+An exception escaping a route handler is logged with its stack and answered
+with a generic `500 {"error":"Internal server error"}` instead of leaving
+the request hanging. Unhandled promise rejections are logged, and an uncaught
+exception is logged before the process exits. Startup logs the Node version,
+pid, port, login mode, registration switch, issuer, and data directory (no
+secrets). The monitoring wrapper is applied only to the real HTTP server in
+`start()`; `createRequestHandler` is unchanged for in-process callers.
+
 ## systemd startup
 
 Prepare the checkout with `npm ci`, configure `.env`, run `npm run build`,

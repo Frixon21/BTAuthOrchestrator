@@ -9,6 +9,13 @@ import { createApiDocsHandler } from "./apiDocs.js";
 import { openDatabase, prepareDataDirectory, type DatabaseHandle } from "./database.js";
 import { createIpThrottle, type IpThrottle } from "./ipThrottle.js";
 import {
+  describeError,
+  describeErrorWithStack,
+  installConsoleFormatting,
+  installProcessErrorLogging,
+  withRequestMonitoring,
+} from "./logging.js";
+import {
   createLocalUserStore,
   EmailConflictError,
   UsernameConflictError,
@@ -327,8 +334,11 @@ function extractActedBy(parsedBody: unknown): string | null {
   return typeof actedBy === "string" && actedBy.trim() !== "" ? actedBy : null;
 }
 
+// Log-line text only (never returned to a client or stored): includes the
+// error code and cause chain so failures like Node's "fetch failed" show
+// their underlying reason.
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return describeError(error);
 }
 
 function extractBearerToken(headerValue: string | string[] | undefined): string | null {
@@ -499,7 +509,7 @@ export function createRequestHandler(
     try {
       clientSecret = await secretsStore.getSecret("CLIENT_SECRET");
     } catch (error) {
-      console.error(`Unable to load CLIENT_SECRET: ${errorMessage(error)}`);
+      console.error(`Unable to load CLIENT_SECRET:\n${describeErrorWithStack(error)}`);
       return renderHtml(500, "Sign-in error", GENERIC_SERVER_ERROR_MESSAGE);
     }
 
@@ -524,7 +534,7 @@ export function createRequestHandler(
         console.error(`Entra token exchange rejected the request: ${errorMessage(error)}`);
         return renderHtml(400, "Sign-in incomplete", SIGN_IN_INCOMPLETE_MESSAGE);
       }
-      console.error(`Unexpected token exchange failure: ${errorMessage(error)}`);
+      console.error(`Unexpected token exchange failure:\n${describeErrorWithStack(error)}`);
       return renderHtml(500, "Sign-in error", GENERIC_SERVER_ERROR_MESSAGE);
     }
 
@@ -551,7 +561,7 @@ export function createRequestHandler(
         console.error(`ID token validation failed: ${errorMessage(error)}`);
         return renderHtml(400, "Sign-in incomplete", SIGN_IN_INCOMPLETE_MESSAGE);
       }
-      console.error(`Unexpected ID token validation failure: ${errorMessage(error)}`);
+      console.error(`Unexpected ID token validation failure:\n${describeErrorWithStack(error)}`);
       return renderHtml(500, "Sign-in error", GENERIC_SERVER_ERROR_MESSAGE);
     }
 
@@ -576,7 +586,7 @@ export function createRequestHandler(
         body: "<!doctype html><html><head><title>Signed in</title></head><body><p>You're signed in. You may close this window.</p></body></html>",
       };
     } catch (error) {
-      console.error(`Session token minting failed: ${errorMessage(error)}`);
+      console.error(`Session token minting failed:\n${describeErrorWithStack(error)}`);
       return renderHtml(500, "Sign-in error", GENERIC_SERVER_ERROR_MESSAGE);
     }
   }
@@ -647,7 +657,7 @@ export function createRequestHandler(
         }),
       };
     } catch (error) {
-      console.error(`Emergency key rotation failed: ${errorMessage(error)}`);
+      console.error(`Emergency key rotation failed:\n${describeErrorWithStack(error)}`);
       await writeEmergencyRotationFailureAudit({ triggeredBy, sourceIp, failureReason: "rotation_error" });
       return {
         status: 500,
@@ -820,7 +830,7 @@ export function createRequestHandler(
         ipThrottle.recordFailure(throttleKey, now);
       }
     } catch (error) {
-      console.error(`Local-login credential verification failed unexpectedly: ${errorMessage(error)}`);
+      console.error(`Local-login credential verification failed unexpectedly:\n${describeErrorWithStack(error)}`);
       return {
         status: 500,
         headers: LOCAL_LOGIN_RESPONSE_HEADERS,
@@ -878,7 +888,7 @@ export function createRequestHandler(
         body: JSON.stringify({ status: "signed_in", username: userRow!.username }),
       };
     } catch (error) {
-      console.error(`Local-login session token minting failed: ${errorMessage(error)}`);
+      console.error(`Local-login session token minting failed:\n${describeErrorWithStack(error)}`);
       return {
         status: 500,
         headers: LOCAL_LOGIN_RESPONSE_HEADERS,
@@ -1019,7 +1029,7 @@ export function createRequestHandler(
         });
         return { status: 409, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify({ error: error.message }) };
       }
-      console.error(`Admin create-user failed unexpectedly: ${errorMessage(error)}`);
+      console.error(`Admin create-user failed unexpectedly:\n${describeErrorWithStack(error)}`);
       await writeAdminAuditBestEffort({
         action: "create",
         targetUserId: null,
@@ -1054,7 +1064,7 @@ export function createRequestHandler(
       // set (create/update/delete/auth_failure only) — no audit row here.
       return { status: 200, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify({ users }) };
     } catch (error) {
-      console.error(`Admin list-users failed unexpectedly: ${errorMessage(error)}`);
+      console.error(`Admin list-users failed unexpectedly:\n${describeErrorWithStack(error)}`);
       return adminServerError();
     }
   }
@@ -1078,7 +1088,7 @@ export function createRequestHandler(
       if (record === undefined) return adminNotFound(); // read action — no audit row, see handleAdminListUsers.
       return { status: 200, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify(record) };
     } catch (error) {
-      console.error(`Admin get-user failed unexpectedly: ${errorMessage(error)}`);
+      console.error(`Admin get-user failed unexpectedly:\n${describeErrorWithStack(error)}`);
       return adminServerError();
     }
   }
@@ -1187,7 +1197,7 @@ export function createRequestHandler(
         });
         return { status: 409, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify({ error: error.message }) };
       }
-      console.error(`Admin update-user failed unexpectedly: ${errorMessage(error)}`);
+      console.error(`Admin update-user failed unexpectedly:\n${describeErrorWithStack(error)}`);
       await writeAdminAuditBestEffort({
         action: "update",
         targetUserId: targetId,
@@ -1251,7 +1261,7 @@ export function createRequestHandler(
         body: JSON.stringify({ status: "deleted", id: deleted.id, username: deleted.username }),
       };
     } catch (error) {
-      console.error(`Admin delete-user failed unexpectedly: ${errorMessage(error)}`);
+      console.error(`Admin delete-user failed unexpectedly:\n${describeErrorWithStack(error)}`);
       await writeAdminAuditBestEffort({
         action: "delete",
         targetUserId: targetId,
@@ -1319,7 +1329,8 @@ export function createRequestHandler(
           "Cache-Control": "no-store",
         });
         response.end(JSON.stringify({ keys }));
-      } catch {
+      } catch (error) {
+        console.error(`JWKS publication failed:\n${describeErrorWithStack(error)}`);
         response.writeHead(500, {
           "Content-Type": "application/json",
           "Cache-Control": "no-store",
@@ -1346,7 +1357,8 @@ export function createRequestHandler(
 <p id="local-users-empty"${users.length > 0 ? " hidden" : ""}>No local users yet.</p>
 <table><thead><tr><th scope="col">Username</th><th scope="col">Status</th></tr></thead>
 <tbody id="local-users-body">${users.map(user => `<tr><td>${escapeHtml(user.username)}</td><td>${user.isActive ? "Active" : "Disabled"}</td></tr>`).join("")}</tbody></table>`;
-      } catch {
+      } catch (error) {
+        console.error(`Registration page could not list local users:\n${describeErrorWithStack(error)}`);
         usersHtml = '<h2>Local users</h2><p>Unable to load local users. Reload the page to try again.</p><p id="local-users-empty" hidden></p><table><thead><tr><th scope="col">Username</th><th scope="col">Status</th></tr></thead><tbody id="local-users-body"></tbody></table>';
       }
       const page = config.allowNewLocalLoginCreation === true
@@ -1425,14 +1437,22 @@ export function createRequestHandler(
 }
 
 async function start(): Promise<void> {
+  installConsoleFormatting();
+  installProcessErrorLogging();
   let databaseHandle: DatabaseHandle | undefined;
   try {
     const config = loadConfig(process.env);
+    console.log(
+      `Starting BTAuthOrchestrator (node ${process.version}, pid ${process.pid}): ` +
+        `port=${config.port} localLogin=${config.localLogin} ` +
+        `allowNewLocalLoginCreation=${config.allowNewLocalLoginCreation} ` +
+        `issuer=${config.issuer} dataDir=${config.pgliteDataDir}`,
+    );
     await prepareDataDirectory(config.pgliteDataDir);
     databaseHandle = await openDatabase(config.pgliteDataDir);
     const secretsStore = createSecretsStore(databaseHandle.database, config.dbEncryptionKey);
     const localUserStore = createLocalUserStore(databaseHandle.database);
-    const server = createServer(createRequestHandler(secretsStore, config, localUserStore));
+    const server = createServer(withRequestMonitoring(createRequestHandler(secretsStore, config, localUserStore)));
 
     server.listen(config.port, () => {
       console.log(`BTAuthOrchestrator listening on port ${config.port}`);
@@ -1469,8 +1489,7 @@ async function start(): Promise<void> {
     process.once("SIGTERM", () => void shutdownFromSignal());
   } catch (error) {
     await databaseHandle?.close().catch(() => undefined);
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(message);
+    console.error(`Startup failed: ${describeError(error)}`);
     process.exitCode = 1;
   }
 }

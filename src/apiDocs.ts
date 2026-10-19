@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Config } from "./config.js";
+import { describeError } from "./logging.js";
 import { createOpenApiDocument } from "./openapi.js";
 
 const assets: Record<string, string> = {
@@ -40,7 +41,8 @@ export function createApiDocsHandler(config: Config) {
       try {
         content = await readFile(join(dirname(require.resolve("swagger-ui-dist/package.json")), filename));
         contentType = assets[filename];
-      } catch {
+      } catch (error) {
+        console.error(`API documentation asset ${filename} could not be read: ${describeError(error)}`);
         response.writeHead(500, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         response.end(request.method === "HEAD" ? undefined : JSON.stringify({ error: "Unable to load API documentation assets" }));
         return true;
