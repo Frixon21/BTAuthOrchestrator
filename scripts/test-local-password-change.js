@@ -235,7 +235,10 @@ async function main() {
     }
     const loginPage = (await request(handler, 'GET', '/auth/local-login')).body;
     assert.match(loginPage, /href="\/auth\/local-change-password"/);
-    for (const path of ['/auth/local-login', '/auth/local-register', '/auth/local-change-password']) assert.equal((await request(handler, 'GET', path)).body.includes('/admin/reset-password'), false);
+    for (const path of ['/auth/local-login', '/auth/local-register', '/auth/local-change-password']) {
+      const body = (await request(handler, 'GET', path)).body;
+      for (const adminPage of ['/admin/reset-password', '/admin/console']) assert.equal(body.includes(adminPage), false);
+    }
     console.log('PASS: both form scripts, mismatch, lookup, PATCH/header/body, optional label, success, text errors, no token storage/public admin link');
   } finally {
     Object.assign(passwords, originals);

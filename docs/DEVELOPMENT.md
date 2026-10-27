@@ -14,6 +14,9 @@
   entry point. `src/password.ts` holds scrypt password hashing/verification
   and `src/localUsers.ts`/`src/ipThrottle.ts` hold the local-login user store
   and per-source-IP throttle (CONTRACT-005).
+- `src/console/`: static browser admin console files (CONTRACT-010), served by
+  `src/adminConsole.ts`. `npm run build` copies them to `dist/console/` with
+  `scripts/copy-console-assets.js`, because `tsc` copies only TypeScript output.
 - `scripts/seed.js`: stable bootstrap entry point that loads the compiled seed
   implementation from `dist/seed.js`.
 - `dist/`: compiled JavaScript output created by the build (not committed).
@@ -58,7 +61,8 @@ npm run verify-offline
 ```
 
 `npm run dev` builds/type-checks and starts the service. `npm run build` compiles
-and type-checks it into `dist/`, and `npm start` runs the compiled service.
+and type-checks it into `dist/` and copies the admin console files to
+`dist/console/` (run `npm run build`, not bare `tsc`, or the console returns 500), and `npm start` runs the compiled service.
 The health check is available at `GET /health`. Public signing keys are
 available at `GET /.well-known/jwks.json`; this response includes current and
 retired keys, excludes revoked keys, and uses `Cache-Control: no-store`.
@@ -172,7 +176,8 @@ best-effort `local_user_admin_audit` update with `actor_label=self-service`,
 `changed_fields=password` on success (null on failure), and no login audit.
 
 Operators can open `/admin/reset-password` directly in either login mode.
-This uncached static page is not linked from public pages. Enter the dedicated
+This uncached static page is not linked from public pages; it links to the
+admin console (`/admin/console`). Enter the dedicated
 admin token, username, password/confirmation, and optional acted-by label.
 The browser resolves the username through authorized `GET /admin/users`, then
 calls the existing `PATCH /admin/users/:id`. The token stays in its input field
@@ -182,7 +187,8 @@ status. Both forms render API errors as text. Neither flow revokes existing
 sessions; emergency key rotation remains the way to invalidate them globally.
 
 Validate with `npm run build`, `node scripts/test-local-password-change.js`,
-`node scripts/test-local-registration.js`, and `node scripts/test-api-docs.js`.
+`node scripts/test-local-registration.js`, `node scripts/test-api-docs.js`, and
+`node scripts/test-admin-console.js`.
 The password-change tests use temporary PGlite, real handler/password functions,
 and VM execution of both inline form scripts; they do not load `.env`.
 
@@ -472,6 +478,53 @@ because the database is not seeded. Check the other `.env` values (Entra IDs,
 the Entra `CLIENT_SECRET` and the first local user's username, email, and
 password. The second `start.bat` locks down the data directory and starts the
 service.
+
+## Browser admin console (CONTRACT-010)
+
+Open `/admin/console` (for example, `http://localhost:3210/admin/console`) in
+either login mode. The page is a static single-page app served by this service,
+with no authentication of its own: every action calls the existing API, which
+authorizes and audits it exactly as before. It covers:
+
+- **Overview:** `GET /health`, the login mode (local when `/api/openapi.json`
+  contains `/auth/local-login`, otherwise Entra; unknown if the document cannot
+  be loaded) and links to `/api/docs`, `/auth/local-register`,
+  `/admin/reset-password` and the active mode's sign-in/change-password pages.
+- **Users:** list, filter, view, create, change email, enable/disable, reset
+  password and delete. Delete requires typing the exact username.
+- **Signing keys:** JWKS `kid`/`alg`/`use` with show/copy modulus, and
+  emergency rotation, which requires typing `ROTATE`.
+- **Settings:** the user-admin and emergency tokens (entered separately), an
+  optional, unverified acting-as label (sent as `actedBy`/`triggeredBy`), Forget
+  all, and the System/Light/Dark theme.
+
+Tokens are kept in the tab's `sessionStorage` (in memory, with a notice, if
+storage is blocked) and never in `localStorage`, cookies or the URL. The
+user-admin token is sent only to `GET`/`PATCH`/`DELETE /admin/users*`; the
+emergency token only to `POST /admin/emergency-rotate-keys`; `POST /admin/users`
+carries no token, so creating users still requires
+`ALLOW_NEW_LOCAL_LOGIN_CREATION=true` and the console explains a `403`. A `401`
+forgets only the token that request used. Password fields are cleared after
+every request. Only the theme preference is stored in `localStorage`.
+
+The page and its allow-listed assets (`app.js`, `theme.js`, `app.css` under
+`/admin/console/`) are served with `Cache-Control: no-store`,
+`X-Content-Type-Options: nosniff` and
+`Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`.
+Any other path under `/admin/console/` returns the generic 404; request paths
+are never resolved against the filesystem. The files contain no inline scripts,
+styles or event handlers, render all dynamic text with `textContent`, and use no
+frameworks, CDN, web fonts or third-party assets. Edit them in `src/console/`
+and rebuild. When adding a console file, add it to both the allow-list in
+`src/adminConsole.ts` and `scripts/copy-console-assets.js`.
+
+No public page links to the console. The console and `/admin/reset-password`
+link to each other. Validate with `npm run build` and
+`node scripts/test-admin-console.js`, which checks serving and headers, static
+rules, computed palette contrast, and runs the console scripts in a VM with
+DOM, `fetch` and storage stand-ins against the real handler and a temporary
+PGlite database. Layout, focus visibility and real-browser behavior still need
+a manual browser check.
 
 ## Interactive API documentation
 

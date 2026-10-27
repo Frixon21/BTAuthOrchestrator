@@ -23,7 +23,8 @@ Supersedes:
 Superseded by: CONTRACT-006 for HTTP creation authorization and the prohibition
 on self-service registration only; CONTRACT-009 for the self-service
 password-change exclusion and browser admin UI exclusion (password-reset
-page only). All other sections remain in force.
+page only); CONTRACT-010 for the browser admin UI exclusion (admin console
+at /admin/console). All other sections remain in force.
 
 ## Purpose
 

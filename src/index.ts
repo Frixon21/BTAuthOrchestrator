@@ -6,6 +6,7 @@ import { exportJWK, importSPKI } from "jose";
 
 import { loadConfig, type Config } from "./config.js";
 import { createApiDocsHandler } from "./apiDocs.js";
+import { createAdminConsoleHandler } from "./adminConsole.js";
 import { openDatabase, prepareDataDirectory, type DatabaseHandle } from "./database.js";
 import { createIpThrottle, type IpThrottle } from "./ipThrottle.js";
 import {
@@ -221,6 +222,7 @@ const ADMIN_RESET_PASSWORD_FORM_HTML = `<!doctype html>
 <button id="submit-button" type="submit">Reset password</button>
 </form>
 <p id="message" role="status"></p>
+<p><a href="/admin/console">Open the admin console</a></p>
 <script>
 (function () {
   var field = function (id) { return document.getElementById(id); };
@@ -539,6 +541,7 @@ export function createRequestHandler(
   localUserStore: LocalUserStore,
 ): RequestListener {
   const handleApiDocs = createApiDocsHandler(config);
+  const handleAdminConsole = createAdminConsoleHandler();
   const handshakeStore = createHandshakeStore();
   const discoveryCache = new EntraDiscoveryCache();
   const ipThrottle: IpThrottle = createIpThrottle(
@@ -1465,6 +1468,7 @@ export function createRequestHandler(
 
   return async (request, response) => {
     if (await handleApiDocs(request, response)) return;
+    if (await handleAdminConsole(request, response)) return;
     if (config.localLogin === false && request.method === "GET" && request.url === "/auth/login") {
       const result = await handleLogin();
       response.writeHead(result.status, result.headers);

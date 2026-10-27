@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "npm run build && npm start",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-console-assets.js",
     "seed": "npm run build && node scripts/seed.js",
     "start": "node --env-file=.env dist/index.js",
     "verify-offline": "npm run build && node scripts/verify-offline.js"

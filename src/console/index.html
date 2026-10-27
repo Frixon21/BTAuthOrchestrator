@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Admin console - BT Auth Orchestrator</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/admin/console/app.css">
+<script src="/admin/console/theme.js"></script>
+<script src="/admin/console/app.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div id="announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <h1 class="brand-name">BT Auth Orchestrator</h1>
+        <p class="brand-sub">Admin console</p>
+      </div>
+    </div>
+    <div class="topbar-tools">
+      <ul class="chips" aria-label="Token status">
+        <li><span id="chip-admin" class="chip">User-admin token: not set</span></li>
+        <li><span id="chip-emergency" class="chip">Emergency token: not set</span></li>
+      </ul>
+      <div class="theme-picker">
+        <label for="theme-select">Theme</label>
+        <select id="theme-select">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Console sections">
+    <button type="button" class="tab" data-section="overview" aria-current="page">Overview</button>
+    <button type="button" class="tab" data-section="users">Users</button>
+    <button type="button" class="tab" data-section="keys">Signing keys</button>
+    <button type="button" class="tab" data-section="settings">Settings</button>
+  </nav>
+</header>
+
+<main id="main" class="main" tabindex="-1">
+  <div id="toast" class="toast" hidden>
+    <p id="toast-text" class="toast-text"></p>
+    <div class="toast-actions">
+      <button type="button" id="toast-action" class="btn btn-small" data-goto="settings" hidden>Open Settings</button>
+      <button type="button" id="toast-dismiss" class="btn btn-small btn-quiet">Dismiss</button>
+    </div>
+  </div>
+  <p id="storage-notice" class="notice notice-warning" hidden>This browser blocks session storage. Tokens and the acting-as label are kept in memory only, and are lost when the page reloads.</p>
+
+  <section id="section-overview" class="section" aria-labelledby="overview-heading">
+    <div class="section-head">
+      <h2 id="overview-heading" tabindex="-1">Overview</h2>
+      <button type="button" id="overview-refresh" class="btn">Refresh</button>
+    </div>
+    <div class="grid grid-3">
+      <article class="card">
+        <h3>Service health</h3>
+        <p id="health-status" class="status status-pending">Checking...</p>
+        <p id="health-detail" class="hint"></p>
+      </article>
+      <article class="card">
+        <h3>Login mode</h3>
+        <p id="mode-status" class="status status-pending">Checking...</p>
+        <p id="mode-detail" class="hint"></p>
+      </article>
+      <article class="card">
+        <h3>Tokens in this tab</h3>
+        <ul class="plain-list">
+          <li id="overview-admin-token">User-admin token: not set</li>
+          <li id="overview-emergency-token">Emergency token: not set</li>
+        </ul>
+        <button type="button" class="btn btn-small" data-goto="settings">Manage tokens</button>
+      </article>
+    </div>
+    <article class="card">
+      <h3>Pages</h3>
+      <ul class="link-list">
+        <li><a href="/api/docs">API documentation</a><span class="hint">Interactive Swagger reference for every endpoint.</span></li>
+        <li><a href="/auth/local-register">Registration page</a><span class="hint">Public account creation and the user status list.</span></li>
+        <li><a href="/admin/reset-password">Admin password reset</a><span class="hint">Standalone reset form that uses the user-admin token.</span></li>
+        <li data-mode="local" hidden><a href="/auth/local-login">Local sign-in</a><span class="hint">Username and password sign-in.</span></li>
+        <li data-mode="local" hidden><a href="/auth/local-change-password">Change password</a><span class="hint">Self-service change using the current password.</span></li>
+        <li data-mode="entra" hidden><a href="/auth/login">Microsoft Entra sign-in</a><span class="hint">Starts the Entra sign-in redirect.</span></li>
+      </ul>
+    </article>
+  </section>
+
+  <section id="section-users" class="section" aria-labelledby="users-heading" hidden>
+    <div class="section-head">
+      <h2 id="users-heading" tabindex="-1">Users</h2>
+      <button type="button" id="users-new" class="btn btn-primary">New user</button>
+    </div>
+
+    <div id="users-list-view">
+      <div id="users-token-prompt" class="notice" hidden>
+        <p>Listing and managing users needs the user-admin token.</p>
+        <button type="button" class="btn btn-small" data-goto="settings">Add it in Settings</button>
+      </div>
+      <div class="toolbar">
+        <div class="field field-grow">
+          <label for="users-filter">Filter by username or email</label>
+          <input id="users-filter" type="search" autocomplete="off" spellcheck="false">
+        </div>
+        <button type="button" id="users-refresh" class="btn">Refresh</button>
+      </div>
+      <p id="users-state" class="list-state">Add the user-admin token to load users.</p>
+      <div id="users-table-wrap" class="table-wrap" hidden>
+        <table class="data-table" role="table">
+          <caption class="visually-hidden">Local users</caption>
+          <thead role="rowgroup">
+            <tr role="row">
+              <th scope="col" role="columnheader">Username</th>
+              <th scope="col" role="columnheader">Email</th>
+              <th scope="col" role="columnheader">Status</th>
+              <th scope="col" role="columnheader">Created</th>
+              <th scope="col" role="columnheader">Updated</th>
+              <th scope="col" role="columnheader"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody" role="rowgroup"></tbody>
+        </table>
+      </div>
+      <p id="users-count" class="hint"></p>
+    </div>
+
+    <div id="user-detail-view" hidden>
+      <button type="button" id="detail-back" class="btn btn-small btn-quiet">Back to users</button>
+      <h3 id="detail-heading" class="detail-heading" tabindex="-1">User details</h3>
+      <p id="detail-state" class="list-state"></p>
+      <div id="detail-body" hidden>
+        <dl class="meta">
+          <div><dt>Username</dt><dd id="detail-username"></dd></div>
+          <div><dt>Email</dt><dd id="detail-email"></dd></div>
+          <div><dt>Status</dt><dd id="detail-status"></dd></div>
+          <div><dt>Created</dt><dd id="detail-created"></dd></div>
+          <div><dt>Updated</dt><dd id="detail-updated"></dd></div>
+          <div><dt>ID</dt><dd id="detail-id" class="mono"></dd></div>
+        </dl>
+        <div class="grid grid-2">
+          <form id="email-form" class="card" novalidate>
+            <h4>Change email</h4>
+            <div class="field">
+              <label for="email-input">New email</label>
+              <input id="email-input" type="email" autocomplete="off" spellcheck="false">
+            </div>
+            <p id="email-message" class="form-message"></p>
+            <div class="actions"><button type="submit" id="email-submit" class="btn btn-primary">Save email</button></div>
+          </form>
+          <div class="card">
+            <h4>Account status</h4>
+            <p class="hint">Disabling blocks new sign-ins. Sessions the user already has stay valid until they expire.</p>
+            <p id="status-message" class="form-message"></p>
+            <div class="actions"><button type="button" id="status-toggle" class="btn">Disable user</button></div>
+          </div>
+          <form id="reset-form" class="card" novalidate>
+            <h4>Reset password</h4>
+            <p class="hint">A reset unlocks the account. It does not re-enable a disabled account, and existing sessions stay valid.</p>
+            <div class="field">
+              <label for="reset-password">New password (at least 12 characters)</label>
+              <input id="reset-password" type="password" autocomplete="new-password">
+            </div>
+            <div class="field">
+              <label for="reset-confirm">Confirm new password</label>
+              <input id="reset-confirm" type="password" autocomplete="new-password">
+            </div>
+            <p id="reset-message" class="form-message"></p>
+            <div class="actions"><button type="submit" id="reset-submit" class="btn btn-primary">Reset password</button></div>
+          </form>
+          <div class="card card-danger">
+            <h4>Delete user</h4>
+            <p class="hint">Permanently deletes this account. Audit history is kept.</p>
+            <div class="actions"><button type="button" id="delete-open" class="btn btn-danger">Delete user...</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="section-keys" class="section" aria-labelledby="keys-heading" hidden>
+    <div class="section-head">
+      <h2 id="keys-heading" tabindex="-1">Signing keys</h2>
+      <button type="button" id="keys-refresh" class="btn">Refresh</button>
+    </div>
+    <article class="card">
+      <h3>Published public keys</h3>
+      <p class="hint">The JWKS document lists the current signing key and retired keys. Revoked keys are left out.</p>
+      <p id="keys-state" class="list-state">Keys have not been loaded yet.</p>
+      <ul id="keys-list" class="key-list"></ul>
+    </article>
+    <article class="card card-danger danger-zone" aria-labelledby="rotate-heading">
+      <h3 id="rotate-heading">Emergency key rotation</h3>
+      <p>Rotation revokes the current signing key and creates a new one. Every session signed with the current key stops working immediately for any verifier that fetches a fresh JWKS.</p>
+      <div id="rotate-token-prompt" class="notice" hidden>
+        <p>Rotation needs the emergency token.</p>
+        <button type="button" class="btn btn-small" data-goto="settings">Add it in Settings</button>
+      </div>
+      <div class="actions"><button type="button" id="rotate-open" class="btn btn-danger">Rotate signing key...</button></div>
+      <div id="rotate-result" class="result" hidden>
+        <h4>Rotation complete</h4>
+        <dl class="meta">
+          <div><dt>Previous key</dt><dd id="rotate-previous" class="mono"></dd></div>
+          <div><dt>New key</dt><dd id="rotate-new" class="mono"></dd></div>
+          <div><dt>Rotated at</dt><dd id="rotate-at"></dd></div>
+        </dl>
+      </div>
+    </article>
+  </section>
+
+  <section id="section-settings" class="section" aria-labelledby="settings-heading" hidden>
+    <div class="section-head">
+      <h2 id="settings-heading" tabindex="-1">Settings</h2>
+    </div>
+    <p class="hint">Tokens are kept in this browser tab's session storage until the tab closes. They are never shown unless you choose Show.</p>
+    <div class="grid grid-2">
+      <form id="admin-token-form" class="card" novalidate>
+        <h3>User-admin token</h3>
+        <p class="hint">LOCAL_USER_ADMIN_TOKEN. Sent only with user list, view, change and delete requests.</p>
+        <p id="admin-token-status" class="token-status">Not set</p>
+        <div class="field">
+          <label for="admin-token-input">User-admin token</label>
+          <div class="input-group">
+            <input id="admin-token-input" type="password" autocomplete="off" spellcheck="false">
+            <button type="button" id="admin-token-reveal" class="btn" aria-pressed="false" aria-controls="admin-token-input">Show</button>
+          </div>
+        </div>
+        <p id="admin-token-message" class="form-message"></p>
+        <div class="actions">
+          <button type="submit" id="admin-token-save" class="btn btn-primary">Save token</button>
+          <button type="button" id="admin-token-forget" class="btn">Forget</button>
+        </div>
+      </form>
+      <form id="emergency-token-form" class="card" novalidate>
+        <h3>Emergency token</h3>
+        <p class="hint">EMERGENCY_ROTATION_TOKEN. Sent only with the emergency key rotation request.</p>
+        <p id="emergency-token-status" class="token-status">Not set</p>
+        <div class="field">
+          <label for="emergency-token-input">Emergency token</label>
+          <div class="input-group">
+            <input id="emergency-token-input" type="password" autocomplete="off" spellcheck="false">
+            <button type="button" id="emergency-token-reveal" class="btn" aria-pressed="false" aria-controls="emergency-token-input">Show</button>
+          </div>
+        </div>
+        <p id="emergency-token-message" class="form-message"></p>
+        <div class="actions">
+          <button type="submit" id="emergency-token-save" class="btn btn-primary">Save token</button>
+          <button type="button" id="emergency-token-forget" class="btn">Forget</button>
+        </div>
+      </form>
+      <form id="acting-form" class="card" novalidate>
+        <h3>Acting as</h3>
+        <p class="hint">Optional label sent as actedBy with user changes and as triggeredBy with key rotation. It is self-asserted and not verified. New users are always recorded as public registration.</p>
+        <div class="field">
+          <label for="acting-input">Acting as (optional)</label>
+          <input id="acting-input" type="text" autocomplete="off">
+        </div>
+        <p id="acting-message" class="form-message"></p>
+        <div class="actions">
+          <button type="submit" id="acting-save" class="btn btn-primary">Save label</button>
+          <button type="button" id="acting-clear" class="btn">Clear</button>
+        </div>
+      </form>
+      <div class="card card-danger">
+        <h3>Forget all</h3>
+        <p class="hint">Removes both tokens and the acting-as label from this tab. Use this before leaving a shared computer.</p>
+        <p id="forget-all-message" class="form-message"></p>
+        <div class="actions"><button type="button" id="forget-all" class="btn btn-danger">Forget all</button></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="create-dialog" class="dialog" aria-labelledby="create-title">
+  <form id="create-form" novalidate>
+    <h2 id="create-title">New user</h2>
+    <p class="notice notice-warning">Creation uses the public registration endpoint. It works only while ALLOW_NEW_LOCAL_LOGIN_CREATION=true, and while that setting is on, anyone who can reach the service can create an account.</p>
+    <div class="field">
+      <label for="create-username">Username</label>
+      <input id="create-username" type="text" autocomplete="off" spellcheck="false" aria-describedby="create-username-hint">
+      <p id="create-username-hint" class="hint">3 to 64 characters: a-z, 0-9, dot, hyphen or underscore. Stored in lowercase.</p>
+    </div>
+    <div class="field">
+      <label for="create-email">Email</label>
+      <input id="create-email" type="email" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="create-password">Password (at least 12 characters)</label>
+      <input id="create-password" type="password" autocomplete="new-password">
+    </div>
+    <div class="field">
+      <label for="create-confirm">Confirm password</label>
+      <input id="create-confirm" type="password" autocomplete="new-password">
+    </div>
+    <p id="create-message" class="form-message"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" id="create-submit" class="btn btn-primary">Create user</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="delete-dialog" class="dialog dialog-danger" aria-labelledby="delete-title" aria-describedby="delete-explain">
+  <form id="delete-form" novalidate>
+    <h2 id="delete-title">Delete user</h2>
+    <p id="delete-explain">This permanently deletes the user <strong id="delete-target" class="mono"></strong>. It cannot be undone. Audit history is kept.</p>
+    <div class="field">
+      <label for="delete-confirm">Type the username to confirm</label>
+      <input id="delete-confirm" type="text" autocomplete="off" spellcheck="false">
+    </div>
+    <p id="delete-message" class="form-message"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" id="delete-submit" class="btn btn-danger" disabled>Delete user</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="rotate-dialog" class="dialog dialog-danger" aria-labelledby="rotate-title" aria-describedby="rotate-explain">
+  <form id="rotate-form" novalidate>
+    <h2 id="rotate-title">Rotate the signing key?</h2>
+    <p id="rotate-explain">The current signing key is revoked and a new key is created. Every session signed with the current key stops working immediately for any verifier that fetches a fresh JWKS. Users must sign in again.</p>
+    <div class="field">
+      <label for="rotate-confirm">Type ROTATE to confirm</label>
+      <input id="rotate-confirm" type="text" autocomplete="off" spellcheck="false">
+    </div>
+    <p id="rotate-message" class="form-message"></p>
+    <div class="dialog-actions">
+      <button type="button" class="btn" data-close>Cancel</button>
+      <button type="submit" id="rotate-submit" class="btn btn-danger" disabled>Rotate key</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
