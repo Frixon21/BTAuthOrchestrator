@@ -92,3 +92,11 @@ Open `/api/docs` on the running service for interactive Swagger documentation
 at `/api/openapi.json`. Documentation reflects the configured login mode and
 registration switch. Try it out calls the running API; protected operations
 require their dedicated bearer tokens in Authorize.
+
+Local users can change their password at `/auth/local-change-password` when
+`LOCAL_LOGIN=true`, using their current password and a different new password
+of at least 12 characters. Operators can open `/admin/reset-password` directly
+in either login mode and use `LOCAL_USER_ADMIN_TOKEN` to reset a password via
+the existing admin API. Resets clear lockout but do not re-enable disabled
+accounts. Existing sessions remain valid after either operation. See
+[development guidance](docs/DEVELOPMENT.md) for behavior and validation.

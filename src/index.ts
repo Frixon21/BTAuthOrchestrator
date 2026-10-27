@@ -105,6 +105,7 @@ const LOCAL_LOGIN_FORM_HTML = `<!doctype html>
 <body>
 <h1>Local sign-in</h1>
 <p><a href="/auth/local-register">Create an account</a></p>
+<p><a href="/auth/local-change-password">Change password</a></p>
 <form id="login-form">
   <div>
     <label for="username">Username</label>
@@ -161,6 +162,108 @@ const LOCAL_LOGIN_FORM_HTML = `<!doctype html>
 </body>
 </html>
 `;
+
+const LOCAL_CHANGE_PASSWORD_FORM_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Change password</title></head><body>
+<h1>Change password</h1>
+<form id="password-form">
+<p><label for="username">Username</label> <input id="username" type="text" autocomplete="username" required></p>
+<p><label for="current-password">Current password</label> <input id="current-password" type="password" autocomplete="current-password" required></p>
+<p><label for="new-password">New password</label> <input id="new-password" type="password" autocomplete="new-password" required minlength="12"></p>
+<p><label for="confirm-password">Confirm new password</label> <input id="confirm-password" type="password" autocomplete="new-password" required minlength="12"></p>
+<button id="submit-button" type="submit">Change password</button>
+</form>
+<p id="message" role="status"></p>
+<p><a href="/auth/local-login">Sign in</a></p>
+<script>
+(function () {
+  var field = function (id) { return document.getElementById(id); };
+  var form = field("password-form");
+  var message = field("message");
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    message.textContent = "";
+    if (field("new-password").value !== field("confirm-password").value) {
+      message.textContent = "Passwords do not match.";
+      return;
+    }
+    field("submit-button").disabled = true;
+    try {
+      var response = await fetch("/auth/local-change-password", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: field("username").value,
+          currentPassword: field("current-password").value, newPassword: field("new-password").value })
+      });
+      var result = await response.json();
+      if (!response.ok) { message.textContent = result.error; return; }
+      form.reset();
+      form.hidden = true;
+      message.textContent = "Your password has been changed.";
+    } catch {
+      message.textContent = "Unable to complete request. Try again.";
+    } finally {
+      field("submit-button").disabled = false;
+    }
+  });
+})();
+</script>
+</body></html>`;
+
+const ADMIN_RESET_PASSWORD_FORM_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Reset password</title></head><body>
+<h1>Reset password</h1>
+<form id="password-form">
+<p><label for="admin-token">Admin token</label> <input id="admin-token" type="password" autocomplete="off" required></p>
+<p><label for="username">Username</label> <input id="username" type="text" autocomplete="username" required></p>
+<p><label for="new-password">New password</label> <input id="new-password" type="password" autocomplete="new-password" required minlength="12"></p>
+<p><label for="confirm-password">Confirm new password</label> <input id="confirm-password" type="password" autocomplete="new-password" required minlength="12"></p>
+<p><label for="acted-by">Acted by (optional)</label> <input id="acted-by" type="text" autocomplete="off"></p>
+<button id="submit-button" type="submit">Reset password</button>
+</form>
+<p id="message" role="status"></p>
+<script>
+(function () {
+  var field = function (id) { return document.getElementById(id); };
+  var form = field("password-form");
+  var message = field("message");
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    message.textContent = "";
+    if (field("new-password").value !== field("confirm-password").value) {
+      message.textContent = "Passwords do not match.";
+      return;
+    }
+    field("submit-button").disabled = true;
+    try {
+      var username = field("username").value.trim().toLowerCase();
+      var listing = await fetch("/admin/users", {
+        headers: { Authorization: "Bearer " + field("admin-token").value }
+      });
+      var users = await listing.json();
+      if (!listing.ok) { message.textContent = users.error; return; }
+      var user = users.users.find(function (user) { return user.username === username; });
+      if (!user) { message.textContent = "No such user."; return; }
+      var body = { password: field("new-password").value };
+      if (field("acted-by").value.trim()) body.actedBy = field("acted-by").value;
+      var response = await fetch("/admin/users/" + encodeURIComponent(user.id), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + field("admin-token").value },
+        body: JSON.stringify(body)
+      });
+      var result = await response.json();
+      if (!response.ok) { message.textContent = result.error; return; }
+      message.textContent = "Password reset for " + username + ".";
+      field("new-password").value = "";
+      field("confirm-password").value = "";
+    } catch {
+      message.textContent = "Unable to complete request. Try again.";
+    } finally {
+      field("submit-button").disabled = false;
+    }
+  });
+})();
+</script>
+</body></html>`;
 
 const LOCAL_REGISTER_FORM_HTML = `<!doctype html>
 <html lang="en">
@@ -715,6 +818,96 @@ export function createRequestHandler(
     }
   }
 
+  // Shared full-cost verification and account-failure effects for both local flows.
+  async function verifyLocalCredentials(normalizedUsername: string, password: string, now: number) {
+    const userRow = await localUserStore.findByUsername(normalizedUsername);
+
+    // CONTRACT-005 §2 step 3: this uniform-cost password-derivation
+    // computation runs to completion for every outcome (unknown username,
+    // locked, disabled, bad password) before the outcome is decided
+    // below, so response timing cannot distinguish them.
+    let passwordMatches = false;
+    if (userRow === undefined) {
+      await deriveDummyHashForTimingParity();
+    } else {
+      passwordMatches = await verifyPassword(password, {
+        hash: userRow.passwordHash,
+        salt: userRow.passwordSalt,
+        algorithm: userRow.passwordAlgorithm,
+        costN: userRow.passwordCostN,
+        blockSizeR: userRow.passwordBlockSizeR,
+        parallelizationP: userRow.passwordParallelizationP,
+        keyLength: userRow.passwordKeyLength,
+      });
+    }
+
+    // CONTRACT-005 §2 step 4: outcome precedence — not found, then locked
+    // (regardless of password match), then disabled (regardless of
+    // password match), then bad password, then success.
+    let failureReason: "unknown_username" | "bad_password" | "disabled" | "locked" | null = null;
+    if (userRow === undefined) {
+      failureReason = "unknown_username";
+    } else {
+      const isLockedNow = userRow.lockedUntil !== null && userRow.lockedUntil.getTime() > now;
+      if (isLockedNow) {
+        failureReason = "locked";
+      } else if (!userRow.isActive) {
+        failureReason = "disabled";
+      } else if (!passwordMatches) {
+        failureReason = "bad_password";
+      }
+    }
+    const isSuccess = failureReason === null;
+
+    // Per-account side effects (§2 step 4 / §3). Locked and disabled
+    // outcomes leave failed_login_attempts/locked_until untouched — an
+    // attempt made while already locked never further extends the
+    // lockout.
+    if (userRow !== undefined && failureReason === "bad_password") {
+      await localUserStore.recordFailedPassword(
+        userRow.id,
+        config.localLoginMaxFailedAttempts,
+        config.localLoginLockoutMinutes,
+      );
+    }
+
+    return { userRow, failureReason, isSuccess };
+  }
+
+  function localCredentialFailureResponse(
+    failureReason: "unknown_username" | "bad_password" | "disabled" | "locked" | null,
+    userRow: Awaited<ReturnType<LocalUserStore["findByUsername"]>>,
+    headers: Record<string, string>,
+  ) {
+    if (failureReason === "unknown_username" || failureReason === "bad_password") {
+      return {
+        status: 401,
+        headers,
+        body: JSON.stringify({ error: LOCAL_LOGIN_INVALID_CREDENTIALS_MESSAGE }),
+      };
+    }
+    if (failureReason === "disabled") {
+      return {
+        status: 403,
+        headers,
+        body: JSON.stringify({ error: LOCAL_LOGIN_DISABLED_MESSAGE }),
+      };
+    }
+    if (failureReason === "locked") {
+      // userRow is defined whenever failureReason === "locked".
+      const lockedUntilIso = userRow!.lockedUntil!.toISOString();
+      return {
+        status: 423,
+        headers,
+        body: JSON.stringify({
+          error: `This account is temporarily locked. Try again after ${lockedUntilIso}.`,
+        }),
+      };
+    }
+
+    return null;
+  }
+
   async function handleLocalLogin(
     request: IncomingMessage,
   ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
@@ -761,60 +954,8 @@ export function createRequestHandler(
     let failureReason: "unknown_username" | "bad_password" | "disabled" | "locked" | null;
     let isSuccess: boolean;
     try {
-      userRow = await localUserStore.findByUsername(normalizedUsername);
-
-      // CONTRACT-005 §2 step 3: this uniform-cost password-derivation
-      // computation runs to completion for every outcome (unknown username,
-      // locked, disabled, bad password) before the outcome is decided
-      // below, so response timing cannot distinguish them.
-      let passwordMatches = false;
-      if (userRow === undefined) {
-        await deriveDummyHashForTimingParity();
-      } else {
-        passwordMatches = await verifyPassword(password, {
-          hash: userRow.passwordHash,
-          salt: userRow.passwordSalt,
-          algorithm: userRow.passwordAlgorithm,
-          costN: userRow.passwordCostN,
-          blockSizeR: userRow.passwordBlockSizeR,
-          parallelizationP: userRow.passwordParallelizationP,
-          keyLength: userRow.passwordKeyLength,
-        });
-      }
-
-      // CONTRACT-005 §2 step 4: outcome precedence — not found, then locked
-      // (regardless of password match), then disabled (regardless of
-      // password match), then bad password, then success.
-      failureReason = null;
-      if (userRow === undefined) {
-        failureReason = "unknown_username";
-      } else {
-        const isLockedNow = userRow.lockedUntil !== null && userRow.lockedUntil.getTime() > now;
-        if (isLockedNow) {
-          failureReason = "locked";
-        } else if (!userRow.isActive) {
-          failureReason = "disabled";
-        } else if (!passwordMatches) {
-          failureReason = "bad_password";
-        }
-      }
-      isSuccess = failureReason === null;
-
-      // Per-account side effects (§2 step 4 / §3). Locked and disabled
-      // outcomes leave failed_login_attempts/locked_until untouched — an
-      // attempt made while already locked never further extends the
-      // lockout.
-      if (userRow !== undefined) {
-        if (isSuccess) {
-          await localUserStore.recordSuccessfulLogin(userRow.id);
-        } else if (failureReason === "bad_password") {
-          await localUserStore.recordFailedPassword(
-            userRow.id,
-            config.localLoginMaxFailedAttempts,
-            config.localLoginLockoutMinutes,
-          );
-        }
-      }
+      ({ userRow, failureReason, isSuccess } = await verifyLocalCredentials(normalizedUsername, password, now));
+      if (isSuccess) await localUserStore.recordSuccessfulLogin(userRow!.id);
 
       // §6: one audit row per attempt, best-effort.
       await writeLocalLoginAuditBestEffort({
@@ -838,31 +979,8 @@ export function createRequestHandler(
       };
     }
 
-    if (failureReason === "unknown_username" || failureReason === "bad_password") {
-      return {
-        status: 401,
-        headers: LOCAL_LOGIN_RESPONSE_HEADERS,
-        body: JSON.stringify({ error: LOCAL_LOGIN_INVALID_CREDENTIALS_MESSAGE }),
-      };
-    }
-    if (failureReason === "disabled") {
-      return {
-        status: 403,
-        headers: LOCAL_LOGIN_RESPONSE_HEADERS,
-        body: JSON.stringify({ error: LOCAL_LOGIN_DISABLED_MESSAGE }),
-      };
-    }
-    if (failureReason === "locked") {
-      // userRow is defined whenever failureReason === "locked".
-      const lockedUntilIso = userRow!.lockedUntil!.toISOString();
-      return {
-        status: 423,
-        headers: LOCAL_LOGIN_RESPONSE_HEADERS,
-        body: JSON.stringify({
-          error: `This account is temporarily locked. Try again after ${lockedUntilIso}.`,
-        }),
-      };
-    }
+    const failure = localCredentialFailureResponse(failureReason, userRow, LOCAL_LOGIN_RESPONSE_HEADERS);
+    if (failure !== null) return failure;
 
     // Success: mint and set bt_session exactly as CONTRACT-001's callback
     // handler does (CONTRACT-005 §9) — same mintSessionToken call, same
@@ -894,6 +1012,75 @@ export function createRequestHandler(
         headers: LOCAL_LOGIN_RESPONSE_HEADERS,
         body: JSON.stringify({ error: LOCAL_LOGIN_GENERIC_SERVER_ERROR_MESSAGE }),
       };
+    }
+  }
+
+  const passwordChangeThrottle = createIpThrottle(
+    config.localLoginIpThrottleMaxAttempts,
+    config.localLoginIpThrottleWindowMinutes * 60_000,
+  );
+
+  async function handleLocalPasswordChange(request: IncomingMessage) {
+    const headers = { ...LOCAL_LOGIN_RESPONSE_HEADERS, "Cache-Control": "no-store" };
+    const reply = (status: number, error: string) => ({ status, headers, body: JSON.stringify({ error }) });
+    const sourceIp = extractSourceIp(request);
+    const throttleKey = sourceIp ?? "unknown";
+    const now = Date.now();
+    if (passwordChangeThrottle.isThrottled(throttleKey, now)) {
+      return reply(429, LOCAL_LOGIN_TOO_MANY_ATTEMPTS_MESSAGE);
+    }
+    if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+      return reply(415, "Content-Type must be application/json");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse((await readRequestBody(request, LOCAL_LOGIN_BODY_LIMIT_BYTES)).toString("utf8"));
+    } catch {
+      return reply(400, "username, currentPassword and newPassword are required");
+    }
+    if (typeof parsed !== "object" || parsed === null) {
+      return reply(400, "username, currentPassword and newPassword are required");
+    }
+    const { username, currentPassword, newPassword } = parsed as Record<string, unknown>;
+    if (typeof username !== "string" || username.trim() === "" ||
+        typeof currentPassword !== "string" || currentPassword === "" ||
+        typeof newPassword !== "string" || newPassword === "") {
+      return reply(400, "username, currentPassword and newPassword are required");
+    }
+    if (newPassword.length < 12) return reply(400, "newPassword must be at least 12 characters");
+    if (newPassword === currentPassword) return reply(400, "newPassword must differ from currentPassword");
+
+    const audit: AdminAuditInput = {
+      action: "update", targetUserId: null, targetUsername: username,
+      changedFields: null, result: "failure", failureReason: "unexpected_error",
+      actorLabel: "self-service", sourceIp,
+    };
+    try {
+      const { userRow, failureReason, isSuccess } = await verifyLocalCredentials(
+        username.trim().toLowerCase(), currentPassword, now,
+      );
+      audit.targetUserId = userRow?.id ?? null;
+      audit.targetUsername = userRow?.username ?? username;
+      audit.failureReason = failureReason;
+      if (failureReason === "unknown_username" || failureReason === "bad_password") {
+        passwordChangeThrottle.recordFailure(throttleKey, now);
+      }
+      if (!isSuccess) return localCredentialFailureResponse(failureReason, userRow, headers)!;
+      const updated = await localUserStore.updateUser(userRow!.id, { passwordHash: await hashPassword(newPassword) });
+      if (updated === undefined) throw new Error("Password-change target no longer exists");
+      audit.result = "success";
+      audit.changedFields = "password";
+      return { status: 200, headers, body: JSON.stringify({ status: "password_changed", username: userRow!.username }) };
+    } catch {
+      audit.failureReason = "unexpected_error";
+      // Do not log exceptions which might contain request or database values.
+      console.error("Local password change failed unexpectedly");
+      return reply(500, "Unable to change password; this has been logged.");
+    } finally {
+      // One attempt, including unexpected failures; never log database error values.
+      try { await localUserStore.writeAdminAudit(audit); } catch {
+        console.error(`local_user_admin_audit write failed: timestamp=${new Date().toISOString()} action=update result=${audit.result} failureReason=${audit.failureReason}`);
+      }
     }
   }
 
@@ -1404,6 +1591,26 @@ export function createRequestHandler(
       }
       if (request.method === "DELETE" && adminUserIdMatch !== null) {
         const result = await handleAdminDeleteUser(request, decodeURIComponent(adminUserIdMatch[1]!));
+        response.writeHead(result.status, result.headers);
+        response.end(result.body);
+        return;
+      }
+    }
+
+    const passwordPath = (request.url ?? "").split("?")[0];
+    if (request.method === "GET" && passwordPath === "/admin/reset-password") {
+      response.writeHead(200, { ...LOCAL_LOGIN_FORM_RESPONSE_HEADERS, "Cache-Control": "no-store" });
+      response.end(ADMIN_RESET_PASSWORD_FORM_HTML);
+      return;
+    }
+    if (config.localLogin && passwordPath === "/auth/local-change-password") {
+      if (request.method === "GET") {
+        response.writeHead(200, { ...LOCAL_LOGIN_FORM_RESPONSE_HEADERS, "Cache-Control": "no-store" });
+        response.end(LOCAL_CHANGE_PASSWORD_FORM_HTML);
+        return;
+      }
+      if (request.method === "POST") {
+        const result = await handleLocalPasswordChange(request);
         response.writeHead(result.status, result.headers);
         response.end(result.body);
         return;

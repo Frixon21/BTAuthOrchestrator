@@ -21,7 +21,9 @@ permanent local-login path alongside Entra; this contract is its full
 behavioral specification).
 Supersedes:
 Superseded by: CONTRACT-006 for HTTP creation authorization and the prohibition
-on self-service registration only; all other sections remain in force.
+on self-service registration only; CONTRACT-009 for the self-service
+password-change exclusion and browser admin UI exclusion (password-reset
+page only). All other sections remain in force.
 
 ## Purpose
 

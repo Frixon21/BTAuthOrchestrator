@@ -153,6 +153,39 @@ attempt (success or failure) writes one row to `local_login_audit`,
 best-effort — a malformed request (missing/invalid body) is rejected `400`
 before any lookup, hashing, or audit write occurs.
 
+#### Local password change and admin reset (CONTRACT-009)
+
+With `LOCAL_LOGIN=true`, open `/auth/local-change-password` (also linked from
+sign-in). Its JSON POST accepts `username`, `currentPassword`, and `newPassword`.
+The new password must be at least 12 characters and differ from the current
+password. Both routes return generic 404 in Entra mode. Verification shares
+sign-in's full-cost scrypt and account lockout. The change endpoint has its own
+IP counter using `LOCAL_LOGIN_IP_THROTTLE_*`; only unknown/wrong credentials
+consume that counter. Throttling precedes body validation. Non-JSON returns
+415; invalid fields, short or unchanged passwords return 400 without lookup,
+hashing, or auditing. Credential errors match sign-in (401/423/403).
+
+Success returns `{"status":"password_changed","username":"<normalized>"}`,
+uses a fresh salt, clears lockout and sets no cookie. JSON responses are
+`Cache-Control: no-store`. Each validated, unthrottled attempt writes one
+best-effort `local_user_admin_audit` update with `actor_label=self-service`,
+`changed_fields=password` on success (null on failure), and no login audit.
+
+Operators can open `/admin/reset-password` directly in either login mode.
+This uncached static page is not linked from public pages. Enter the dedicated
+admin token, username, password/confirmation, and optional acted-by label.
+The browser resolves the username through authorized `GET /admin/users`, then
+calls the existing `PATCH /admin/users/:id`. The token stays in its input field
+and is sent only to those same-origin API calls; it is never persisted.
+Admin resets may reuse the same password, clear lockout, and preserve disabled
+status. Both forms render API errors as text. Neither flow revokes existing
+sessions; emergency key rotation remains the way to invalidate them globally.
+
+Validate with `npm run build`, `node scripts/test-local-password-change.js`,
+`node scripts/test-local-registration.js`, and `node scripts/test-api-docs.js`.
+The password-change tests use temporary PGlite, real handler/password functions,
+and VM execution of both inline form scripts; they do not load `.env`.
+
 #### Local user admin API (CONTRACT-005 §4, TASK-016)
 
 Public account creation is now defined by [CONTRACT-006](contracts/CONTRACT-006-public-local-registration.md)
