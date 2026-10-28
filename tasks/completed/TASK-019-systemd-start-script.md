@@ -95,7 +95,3 @@ docs/DEVELOPMENT.md: setup, checks, systemd PATH, and journal instructions.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

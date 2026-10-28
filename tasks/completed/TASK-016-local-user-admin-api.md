@@ -497,7 +497,3 @@ All five of TASK-016's acceptance criteria are met under that reading.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

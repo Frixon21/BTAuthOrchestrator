@@ -603,7 +603,3 @@ per "Validation performed" above.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

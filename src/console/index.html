@@ -25,7 +25,8 @@
       </div>
     </div>
     <div class="topbar-tools">
-      <ul class="chips" aria-label="Token status">
+      <ul class="chips" aria-label="Sign-in and token status">
+        <li><span id="chip-session" class="chip">Not signed in</span></li>
         <li><span id="chip-admin" class="chip">User-admin token: not set</span></li>
         <li><span id="chip-emergency" class="chip">Emergency token: not set</span></li>
       </ul>
@@ -74,12 +75,13 @@
         <p id="mode-detail" class="hint"></p>
       </article>
       <article class="card">
-        <h3>Tokens in this tab</h3>
+        <h3>Sign-in and tokens</h3>
         <ul class="plain-list">
+          <li id="overview-session">Console sign-in: not signed in</li>
           <li id="overview-admin-token">User-admin token: not set</li>
           <li id="overview-emergency-token">Emergency token: not set</li>
         </ul>
-        <button type="button" class="btn btn-small" data-goto="settings">Manage tokens</button>
+        <button type="button" class="btn btn-small" data-goto="settings">Sign in or manage tokens</button>
       </article>
     </div>
     <article class="card">
@@ -103,8 +105,20 @@
 
     <div id="users-list-view">
       <div id="users-token-prompt" class="notice" hidden>
-        <p>Listing and managing users needs the user-admin token.</p>
-        <button type="button" class="btn btn-small" data-goto="settings">Add it in Settings</button>
+        <p id="users-prompt-text">Sign in, or add the user-admin token in Settings, to list and manage users.</p>
+        <form id="quick-signin-form" novalidate hidden>
+          <div class="field">
+            <label for="quick-signin-username">Username</label>
+            <input id="quick-signin-username" type="text" autocomplete="username" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="quick-signin-password">Password</label>
+            <input id="quick-signin-password" type="password" autocomplete="current-password">
+          </div>
+          <p id="quick-signin-message" class="form-message"></p>
+          <div class="actions"><button type="submit" id="quick-signin-submit" class="btn btn-primary">Sign in</button></div>
+        </form>
+        <button type="button" class="btn btn-small" data-goto="settings">Use a token in Settings</button>
       </div>
       <div class="toolbar">
         <div class="field field-grow">
@@ -113,7 +127,7 @@
         </div>
         <button type="button" id="users-refresh" class="btn">Refresh</button>
       </div>
-      <p id="users-state" class="list-state">Add the user-admin token to load users.</p>
+      <p id="users-state" class="list-state">Sign in or add the user-admin token to load users.</p>
       <div id="users-table-wrap" class="table-wrap" hidden>
         <table class="data-table" role="table">
           <caption class="visually-hidden">Local users</caption>
@@ -220,11 +234,33 @@
     <div class="section-head">
       <h2 id="settings-heading" tabindex="-1">Settings</h2>
     </div>
-    <p class="hint">Tokens are kept in this browser tab's session storage until the tab closes. They are never shown unless you choose Show.</p>
+    <p class="hint">Sign in with your local account to manage users. Tokens are the fallback: they are kept in this browser tab's session storage until the tab closes, and are never shown unless you choose Show.</p>
     <div class="grid grid-2">
+      <div class="card">
+        <h3>Console sign-in</h3>
+        <p class="hint">Any active local user can manage users after signing in. Emergency key rotation still needs the emergency token.</p>
+        <p id="session-status" class="token-status">Checking...</p>
+        <p id="session-unavailable" class="notice" hidden></p>
+        <form id="signin-form" novalidate hidden>
+          <div class="field">
+            <label for="signin-username">Username</label>
+            <input id="signin-username" type="text" autocomplete="username" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="signin-password">Password</label>
+            <input id="signin-password" type="password" autocomplete="current-password">
+          </div>
+          <div class="actions"><button type="submit" id="signin-submit" class="btn btn-primary">Sign in</button></div>
+        </form>
+        <div id="signed-in-view" hidden>
+          <p class="hint">Signing out signs this browser out of every BizTech app, not just the console.</p>
+          <div class="actions"><button type="button" id="signout" class="btn">Sign out</button></div>
+        </div>
+        <p id="signin-message" class="form-message"></p>
+      </div>
       <form id="admin-token-form" class="card" novalidate>
         <h3>User-admin token</h3>
-        <p class="hint">LOCAL_USER_ADMIN_TOKEN. Sent only with user list, view, change and delete requests.</p>
+        <p class="hint">LOCAL_USER_ADMIN_TOKEN. Sent with user requests, including creating users, only while you are not signed in.</p>
         <p id="admin-token-status" class="token-status">Not set</p>
         <div class="field">
           <label for="admin-token-input">User-admin token</label>
@@ -258,7 +294,7 @@
       </form>
       <form id="acting-form" class="card" novalidate>
         <h3>Acting as</h3>
-        <p class="hint">Optional label sent as actedBy with user changes and as triggeredBy with key rotation. It is self-asserted and not verified. New users are always recorded as public registration.</p>
+        <p class="hint">Optional label sent as actedBy with token-authorized user changes and as triggeredBy with key rotation. It is self-asserted and not verified. While you are signed in it is not used, because changes are recorded under your username.</p>
         <div class="field">
           <label for="acting-input">Acting as (optional)</label>
           <input id="acting-input" type="text" autocomplete="off">
@@ -282,7 +318,7 @@
 <dialog id="create-dialog" class="dialog" aria-labelledby="create-title">
   <form id="create-form" novalidate>
     <h2 id="create-title">New user</h2>
-    <p class="notice notice-warning">Creation uses the public registration endpoint. It works only while ALLOW_NEW_LOCAL_LOGIN_CREATION=true, and while that setting is on, anyone who can reach the service can create an account.</p>
+    <p class="notice notice-warning">Creating a user needs you to be signed in or to have the user-admin token. While ALLOW_NEW_LOCAL_LOGIN_CREATION=true, anyone who can reach the service can also create an account through public registration.</p>
     <div class="field">
       <label for="create-username">Username</label>
       <input id="create-username" type="text" autocomplete="off" spellcheck="false" aria-describedby="create-username-hint">

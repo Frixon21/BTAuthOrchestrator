@@ -99,6 +99,11 @@ export interface AdminAuditInput {
   failureReason: string | null;
   actorLabel: string | null;
   sourceIp: string | null;
+  // CONTRACT-011 §6. Omitted (stored as NULL) where no admin credential is
+  // involved, such as self-service password changes.
+  authMethod?: "token" | "session" | "public" | null;
+  // The signed-in user's local_users.id, for authMethod 'session' only.
+  actorUserId?: string | null;
 }
 
 export interface LocalUserStore {
@@ -385,8 +390,8 @@ export function createLocalUserStore(database: PGlite): LocalUserStore {
     await database.query(
       `INSERT INTO local_user_admin_audit (
          id, action, target_user_id, target_username, changed_fields,
-         result, failure_reason, actor_label, source_ip
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         result, failure_reason, actor_label, source_ip, auth_method, actor_user_id
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         randomUUID(),
         input.action,
@@ -397,6 +402,8 @@ export function createLocalUserStore(database: PGlite): LocalUserStore {
         input.failureReason,
         input.actorLabel,
         input.sourceIp,
+        input.authMethod ?? null,
+        input.actorUserId ?? null,
       ],
     );
   }

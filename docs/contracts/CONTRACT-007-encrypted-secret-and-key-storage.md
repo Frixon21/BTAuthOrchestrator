@@ -1,6 +1,6 @@
 # CONTRACT-007: Encrypted secret & key storage in PGlite
 
-Status: Accepted
+Status: Retired
 Approved by: Patrick Moon
 Approved date: 2026-10-01
 Related tasks: TASK-005, TASK-006, TASK-008, TASK-009 (all unaffected —
@@ -10,7 +10,7 @@ Related ADRs: ADR-001 (contracts are retired by supersession, never amended
 in place).
 Supersedes: CONTRACT-004 (retired in full; see CONTRACT-004's own header and
 ADR-001 for why).
-Superseded by:
+Superseded by: CONTRACT-008 (in full; approved by Patrick 2026-10-28)
 
 ## Purpose
 

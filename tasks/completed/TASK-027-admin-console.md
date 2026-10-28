@@ -304,7 +304,3 @@ CONTRACT-005 headers.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

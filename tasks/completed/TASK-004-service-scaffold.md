@@ -240,7 +240,3 @@ None.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

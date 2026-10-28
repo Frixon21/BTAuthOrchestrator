@@ -103,7 +103,3 @@ supersession header.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

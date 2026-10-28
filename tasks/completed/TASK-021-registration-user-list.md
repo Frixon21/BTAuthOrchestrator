@@ -62,7 +62,3 @@ README.md and docs/DEVELOPMENT.md.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

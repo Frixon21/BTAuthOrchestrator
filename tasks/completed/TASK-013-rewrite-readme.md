@@ -149,7 +149,3 @@ None identified.
 
 Not applicable — Patrick requested this directly and is reviewing the
 result himself; no independent reviewer role assigned to this task.
-
-## Human acceptance
-
-Pending.

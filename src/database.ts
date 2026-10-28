@@ -97,6 +97,14 @@ CREATE TABLE IF NOT EXISTS local_user_admin_audit (
   actor_label text,
   source_ip text
 );
+
+-- CONTRACT-011 §6. How each admin action was authorized and, for console
+-- sessions, which local user performed it. Rows written before this
+-- migration keep NULL in both. ADD COLUMN IF NOT EXISTS keeps it idempotent.
+ALTER TABLE local_user_admin_audit
+  ADD COLUMN IF NOT EXISTS auth_method text CHECK (auth_method IN ('token', 'session', 'public'));
+ALTER TABLE local_user_admin_audit
+  ADD COLUMN IF NOT EXISTS actor_user_id text;
 `;
 
 export interface DatabaseHandle {

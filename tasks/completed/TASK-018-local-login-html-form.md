@@ -329,7 +329,3 @@ Reviewing all four together, from this task's vantage point:
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

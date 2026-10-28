@@ -49,13 +49,26 @@ async function main() {
     const body = { username: 'New.User', email: 'new@example.test', password: 'fixture-password-123', actedBy: 'forged-admin' };
     const json = { 'content-type': 'application/json' };
     const auth = { ...json, authorization: `Bearer ${environment.LOCAL_USER_ADMIN_TOKEN}` };
-    for (const headers of [json, auth]) {
-      assert.equal((await request(disabled, 'POST', '/admin/users', body, headers)).status, 403);
-    }
+    // CONTRACT-011 §7: with registration off, anonymous creation is a 401 and
+    // the admin token still creates users, attributed to its actedBy.
+    assert.equal((await request(disabled, 'POST', '/admin/users', body, json)).status, 401);
     assert.equal((await store.listUsers()).length, 0);
     assert.equal((await request(disabled, 'GET', '/auth/local-register')).body.includes('<form'), false);
     assert.match((await request(disabled, 'GET', '/auth/local-register')).body, /No local users yet/);
-    console.log('PASS: disabled API refuses anonymous/admin creation and renders disabled page');
+    const tokenBody = { ...body, username: 'token.user', email: 'token@example.test' };
+    const tokenCreated = await request(disabled, 'POST', '/admin/users', tokenBody, auth);
+    assert.equal(tokenCreated.status, 201);
+    assert.equal((await request(enabled, 'POST', '/admin/users', { ...tokenBody, username: 'wrong.token', email: 'wrong@example.test' },
+      { ...json, authorization: 'Bearer wrong-token' })).status, 401, 'a wrong token never falls back to public creation');
+    assert.equal((await request(enabled, 'POST', '/admin/users', { ...tokenBody, username: 'enabled.token', email: 'enabled@example.test' }, auth)).status, 201);
+    const tokenRows = await handle.database.query(
+      "SELECT u.username, u.created_by, a.auth_method FROM local_users u JOIN local_user_admin_audit a ON a.target_user_id = u.id AND a.action = 'create' ORDER BY u.username");
+    assert.deepEqual(tokenRows.rows.map(r => ({ ...r })), [
+      { username: 'enabled.token', created_by: 'forged-admin', auth_method: 'token' },
+      { username: 'token.user', created_by: 'forged-admin', auth_method: 'token' },
+    ]);
+    for (const user of await store.listUsers()) await store.deleteUser(user.id);
+    console.log('PASS: disabled API refuses anonymous creation, admin token creates in both states, disabled page renders');
 
     assert.equal((await request(enabled, 'POST', '/admin/users', body)).status, 415);
     assert.equal((await request(enabled, 'POST', '/admin/users', { ...body, password: 'short' }, json)).status, 400);
@@ -69,6 +82,8 @@ async function main() {
     assert.notEqual(Buffer.from(rows.rows[0].password_hash).toString(), body.password);
     assert.ok(rows.rows[0].password_salt.length > 0);
     assert.equal(rows.rows[0].created_by, 'public-registration');
+    const publicAudit = await handle.database.query("SELECT auth_method FROM local_user_admin_audit WHERE action = 'create' AND target_username = 'new.user' AND result = 'success'");
+    assert.equal(publicAudit.rows[0].auth_method, 'public');
     assert.equal((await request(enabled, 'POST', '/admin/users', body, json)).status, 409);
     assert.equal((await request(enabled, 'POST', '/admin/users', { ...body, username: 'other.user' }, json)).status, 409);
     console.log('PASS: public creation, validation, hashing, attribution, and duplicate rejection');

@@ -182,9 +182,3 @@ CONTRACT-002's "Open questions" section now reads "None outstanding."
 
 Not applicable — contract-only task, no separate reviewer role; reviewed
 directly by Patrick as part of approval (see Human acceptance).
-
-## Human acceptance
-
-Accepted by Patrick Moon, 2026-09-14. CONTRACT-002 marked Approved.
-TASK-005, TASK-006, TASK-008, and TASK-009 (implementation) may now
-proceed against it.

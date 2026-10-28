@@ -116,8 +116,3 @@ No open questions remain. See `docs/contracts/CONTRACT-001-oidc-login-and-sessio
 
 Not applicable — contract-only task, no separate reviewer role; reviewed
 directly by Patrick as part of approval (see Human acceptance).
-
-## Human acceptance
-
-Accepted by Patrick Moon, 2026-09-14. CONTRACT-001 marked Approved.
-TASK-007 (implementation) may now proceed against it.

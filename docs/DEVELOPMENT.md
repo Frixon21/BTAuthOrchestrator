@@ -204,10 +204,13 @@ uppercase spelling is absent. Only trimmed, case-insensitive `true` enables
 creation; missing or any other value disables it.
 
 The form posts username, email, and password to the same-origin `/admin/users`
-as JSON. This POST is public while enabled and returns 403 while disabled,
-even with a valid admin token. Other admin operations retain bearer-token
-authorization. Public creation uses the existing validation, password hashing,
-duplicate handling, and audit storage; attribution is `public-registration`.
+as JSON. Without an `Authorization` header this POST is public while enabled,
+recorded as `public-registration`. [CONTRACT-011](contracts/CONTRACT-011-console-sign-in-for-local-users.md)
+§7 (TASK-028) replaced CONTRACT-006's `403`: while creation is disabled the POST
+needs the user-admin token or a console session and otherwise returns `401`,
+and the user-admin token creates users in both states, recorded with its
+`actedBy`. A wrong token is always `401`, never public. Public creation uses the
+existing validation, password hashing, duplicate handling, and audit storage.
 Non-JSON creation requests return 415. The switch is independent of LOCAL_LOGIN
 and does not affect operator bootstrap via `npm run seed`.
 
@@ -227,10 +230,10 @@ whether or not local-login mode is currently active. Except for public creation
 (`POST /admin/users`, gated above), each request must carry
 `Authorization: Bearer <LOCAL_USER_ADMIN_TOKEN>`, checked with
 `crypto.timingSafeEqual` (never `===`), the same constant-time-comparison
-helper `POST /admin/emergency-rotate-keys` uses; a missing, malformed, or
-incorrect header always returns a generic `401 {"error":"Unauthorized"}` that
-never distinguishes which check failed, and a valid `bt_session` cookie alone
-never substitutes for this token. All admin responses include
+helper `POST /admin/emergency-rotate-keys` uses, or be session-authorized as
+described under "Console sign-in" below. A missing, malformed, or incorrect
+credential always returns a generic `401 {"error":"Unauthorized"}` that never
+distinguishes which check failed. All admin responses include
 `Cache-Control: no-store`.
 
 `POST /admin/users` accepts `{"username": string, "email": string,
@@ -479,6 +482,47 @@ the Entra `CLIENT_SECRET` and the first local user's username, email, and
 password. The second `start.bat` locks down the data directory and starts the
 service.
 
+## Console sign-in (CONTRACT-011, TASK-028)
+
+Any active local user can sign in to the admin console and manage users
+without a token. The bearer tokens still work and remain the last-resort path.
+
+- **Session authorization.** `GET`/`PATCH`/`DELETE /admin/users*` and
+  `POST /admin/users` accept a `bt_session` cookie instead of the user-admin
+  token when every rule holds: `ALLOW_NEW_LOCAL_LOGIN_CREATION` is off,
+  `LOCAL_LOGIN=true`, exactly one `bt_session` cookie is sent, it verifies
+  against this service's current or retired keys (never revoked) with our
+  `SERVICE_ISSUER` and an unexpired `exp`, its `sub` is a `local_users` row
+  with `is_active = true` at request time (Entra sessions never match), and
+  the request carries `X-BT-Admin-Console: 1` plus, when the browser sends
+  them, an `Origin` equal to `SERVICE_ISSUER`'s origin and
+  `Sec-Fetch-Site: same-origin`. A temporary lockout does not remove session
+  admin. A request with any `Authorization` header is judged by the token
+  alone. Logic lives in `authorizeAdminRequest` in `src/index.ts`.
+- **Failures** return the generic `401` and an `auth_failure` audit row whose
+  `failure_reason` is `bad_credential`, `session_registration_open`,
+  `session_local_login_off`, `session_invalid`, `session_user_not_active` or
+  `session_csrf_rejected`. A key or user lookup failure returns `500`.
+- **Emergency rotation** never reads the cookie.
+- **`GET /admin/session`** (both modes, no credential) returns
+  `{sessionAdmin, reason, signedIn, user}` for the console.
+- **`POST /auth/logout`** (both modes) needs the same header and origin checks
+  (`403` otherwise) and expires `bt_session` for every `*.biztechro.com` app in
+  that browser. It does not revoke the token.
+- **Audit.** `local_user_admin_audit` gained `auth_method` (`token`, `session`,
+  `public`) and `actor_user_id`, added idempotently at startup; older rows and
+  self-service password changes keep `NULL`. Session-authorized writes record
+  the user's username as `actor_label` and ignore `actedBy`; users they create
+  get `created_by` set to that username.
+
+The `bt_session` cookie is set for `.biztechro.com`, so a browser keeps it only
+when the console is opened at a `biztechro.com` host (over HTTPS when
+`COOKIE_SECURE=true`). At `localhost` the console explains that the cookie was
+not kept and points to the token. To try sign-in locally, map a name such as
+`orca.biztechro.com` to `127.0.0.1` in your hosts file and set
+`COOKIE_SECURE=false` and `SERVICE_ISSUER` to that address. Validate with
+`node scripts/test-console-sign-in.js` and `node scripts/test-admin-console.js`.
+
 ## Browser admin console (CONTRACT-010)
 
 Open `/admin/console` (for example, `http://localhost:3210/admin/console`) in
@@ -494,17 +538,21 @@ authorizes and audits it exactly as before. It covers:
   password and delete. Delete requires typing the exact username.
 - **Signing keys:** JWKS `kid`/`alg`/`use` with show/copy modulus, and
   emergency rotation, which requires typing `ROTATE`.
-- **Settings:** the user-admin and emergency tokens (entered separately), an
-  optional, unverified acting-as label (sent as `actedBy`/`triggeredBy`), Forget
-  all, and the System/Light/Dark theme.
+- **Settings:** console sign-in and sign-out (CONTRACT-011), the user-admin
+  and emergency tokens (entered separately), an optional, unverified acting-as
+  label (sent as `actedBy`/`triggeredBy`, and hidden and not sent while signed
+  in), Forget all, and the System/Light/Dark theme. The Users area also offers
+  sign-in when neither a session nor a token is available.
 
 Tokens are kept in the tab's `sessionStorage` (in memory, with a notice, if
-storage is blocked) and never in `localStorage`, cookies or the URL. The
-user-admin token is sent only to `GET`/`PATCH`/`DELETE /admin/users*`; the
-emergency token only to `POST /admin/emergency-rotate-keys`; `POST /admin/users`
-carries no token, so creating users still requires
-`ALLOW_NEW_LOCAL_LOGIN_CREATION=true` and the console explains a `403`. A `401`
-forgets only the token that request used. Password fields are cleared after
+storage is blocked) and never in `localStorage`, cookies or the URL. While
+signed in, `/admin/users*` requests send no `Authorization` header and rely on
+the cookie; otherwise the user-admin token is sent to them, including
+`POST /admin/users` (which needs no credential while public registration is on).
+Every `/admin/users*` request carries `X-BT-Admin-Console: 1`. The emergency
+token goes only to `POST /admin/emergency-rotate-keys`. A token `401` forgets
+only that token; a session `401` returns the console to signed out and keeps
+saved tokens. Password fields are cleared after
 every request. Only the theme preference is stored in `localStorage`.
 
 The page and its allow-listed assets (`app.js`, `theme.js`, `app.css` under
@@ -537,8 +585,9 @@ The document is generated from `src/openapi.ts` and the startup configuration.
 It includes only the active local/Entra login routes and describes the current
 registration switch. Both docs endpoints are public and contain no credential
 values. Swagger's Authorize dialog accepts the dedicated user-admin and
-emergency-rotation bearer tokens separately; session cookies do not grant
-admin access. Try it out sends real requests to this service. Authorization
+emergency-rotation bearer tokens separately. The document also lists the
+`ConsoleSession` cookie scheme for user management (CONTRACT-011), which
+Swagger cannot send for you. Try it out sends real requests to this service. Authorization
 is not persisted across reloads, and the external spec validator is disabled.
 
 When changing endpoints, update their schemas, responses, and security in

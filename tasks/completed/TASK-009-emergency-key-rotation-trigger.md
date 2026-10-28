@@ -441,7 +441,3 @@ service over a real HTTP socket, not just the exported handler function.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

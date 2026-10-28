@@ -144,7 +144,3 @@ TLS provisioning. See "TLS finding" above and NOTES.md §5.
 ## Review
 
 Not applicable — human-owned task, no separate reviewer.
-
-## Human acceptance
-
-Accepted by Patrick.

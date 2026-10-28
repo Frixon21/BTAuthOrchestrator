@@ -400,7 +400,3 @@ is unavailable, even though this session did not need to rely on it.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

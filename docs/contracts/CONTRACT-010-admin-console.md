@@ -14,7 +14,10 @@ Supersedes:
 
 All other behavior in CONTRACT-003, CONTRACT-005, CONTRACT-006 and
 CONTRACT-009 remains in force.
-Superseded by:
+Superseded by: CONTRACT-011 for the exclusion of console accounts and
+sessions, the statement that the console adds no authorization rules, the
+"Token sent" column of Inputs and outputs, and §2's rule that
+`POST /admin/users` never carries a token. All other sections remain in force.
 
 ## Purpose
 

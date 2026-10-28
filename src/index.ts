@@ -2,7 +2,7 @@ import { generateKeyPair, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type RequestListener } from "node:http";
 import { promisify } from "node:util";
 
-import { exportJWK, importSPKI } from "jose";
+import { exportJWK, importSPKI, jwtVerify } from "jose";
 
 import { loadConfig, type Config } from "./config.js";
 import { createApiDocsHandler } from "./apiDocs.js";
@@ -368,6 +368,22 @@ const ADMIN_EMAIL_MAX_LENGTH = 254;
 
 type HandlerResult = { status: number; headers: Record<string, string>; body: string };
 
+// CONTRACT-011 §1: the outcome of authorizing one /admin/users* request,
+// by the user-admin token or by a console session. `method` is null when the
+// request carried neither credential.
+type SessionAdminFailure =
+  | "bad_credential"
+  | "session_registration_open"
+  | "session_local_login_off"
+  | "session_invalid"
+  | "session_user_not_active"
+  | "session_csrf_rejected";
+type AdminAuthorization =
+  | { ok: true; method: "token" }
+  | { ok: true; method: "session"; user: { id: string; username: string } }
+  | { ok: false; method: "token" | "session" | null; failureReason: SessionAdminFailure }
+  | { ok: false; serverError: true };
+
 function adminUnauthorized(): HandlerResult {
   return {
     status: 401,
@@ -519,6 +535,51 @@ function renderHtml(status: number, title: string, message: string): { status: n
     headers: { "Content-Type": "text/html; charset=utf-8" },
     body: `<!doctype html><html><head><title>${title}</title></head><body><p>${message}</p></body></html>`,
   };
+}
+
+// CONTRACT-011 §1 rule 3: every bt_session value in the Cookie header, so a
+// request carrying more than one (for example one planted by a sibling
+// subdomain) can be refused rather than silently picking one.
+function readSessionCookies(request: IncomingMessage): string[] {
+  const header = request.headers.cookie;
+  if (typeof header !== "string") return [];
+  const values: string[] = [];
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    if (part.slice(0, separator).trim() === SESSION_COOKIE_NAME) values.push(part.slice(separator + 1).trim());
+  }
+  return values;
+}
+
+// CONTRACT-011 §1 rule 7, the request-forgery defense for cookie-authorized
+// requests. Another origin cannot add the custom header without a CORS
+// preflight, which this service never answers; Origin and Sec-Fetch-Site are
+// checked only when the browser sends them.
+const ADMIN_CONSOLE_REQUEST_HEADER = "x-bt-admin-console";
+function passesConsoleRequestChecks(request: IncomingMessage, issuerOrigin: string): boolean {
+  if (request.headers[ADMIN_CONSOLE_REQUEST_HEADER] !== "1") return false;
+  const origin = request.headers.origin;
+  if (origin !== undefined && origin !== issuerOrigin) return false;
+  const fetchSite = request.headers["sec-fetch-site"];
+  if (fetchSite !== undefined && fetchSite !== "same-origin") return false;
+  return true;
+}
+
+// CONTRACT-011 §4: expires bt_session with the same name, Domain and Path
+// CONTRACT-001 §7 sets it with.
+function buildClearSessionCookieHeader(secure: boolean): string {
+  const attributes = [
+    `${SESSION_COOKIE_NAME}=`,
+    `Domain=${SESSION_COOKIE_DOMAIN}`,
+    "Path=/",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+    "Max-Age=0",
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+  if (secure) attributes.push("Secure");
+  return attributes.join("; ");
 }
 
 function buildSetCookieHeader(token: string, iat: number, exp: number, secure: boolean): string {
@@ -1105,6 +1166,107 @@ export function createRequestHandler(
     return token !== null && constantTimeTokenMatches(token, config.localUserAdminToken);
   }
 
+  // SERVICE_ISSUER is not validated as a URL at startup; if it does not
+  // parse, no Origin header can match, so cookie admin fails closed whenever
+  // the browser sends one.
+  const issuerOrigin = URL.canParse(config.issuer) ? new URL(config.issuer).origin : "";
+
+  // CONTRACT-011 §1 rules 4-6: the bt_session must verify against one of this
+  // service's own current or retired keys with our issuer and an unexpired
+  // exp, and its sub must be an active local user right now. Entra sessions
+  // fail rule 5 because their sub is an Entra object id. Database failures
+  // throw, so the caller answers 500 instead of a misleading 401.
+  async function resolveSessionUser(
+    token: string,
+  ): Promise<{ id: string; username: string } | "session_invalid" | "session_user_not_active"> {
+    const keys = await secretsStore.listPublishableSigningKeys();
+    let subject: string;
+    try {
+      const { payload } = await jwtVerify(
+        token,
+        async (header) => {
+          const key = keys.find((candidate) => candidate.kid === header.kid);
+          if (key === undefined) throw new Error("Unknown signing key");
+          return importSPKI(key.publicKeyPem, "RS256");
+        },
+        { issuer: config.issuer, algorithms: ["RS256"], requiredClaims: ["exp", "sub"] },
+      );
+      if (typeof payload.sub !== "string" || payload.sub === "") return "session_invalid";
+      subject = payload.sub;
+    } catch {
+      return "session_invalid";
+    }
+    const user = await localUserStore.getUserById(subject);
+    if (user === undefined || !user.isActive) return "session_user_not_active";
+    return { id: user.id, username: user.username };
+  }
+
+  // CONTRACT-011 §1. An Authorization header always means the token path and
+  // the cookie is ignored. Otherwise the session rules are checked in the
+  // contract's order: 1, 2 and 7 (no I/O) before 3-6.
+  async function authorizeAdminRequest(request: IncomingMessage): Promise<AdminAuthorization> {
+    if (request.headers.authorization !== undefined) {
+      return checkAdminBearerAuth(request)
+        ? { ok: true, method: "token" }
+        : { ok: false, method: "token", failureReason: "bad_credential" };
+    }
+    const sessionTokens = readSessionCookies(request);
+    if (sessionTokens.length === 0) return { ok: false, method: null, failureReason: "bad_credential" };
+    if (config.allowNewLocalLoginCreation === true) {
+      return { ok: false, method: "session", failureReason: "session_registration_open" };
+    }
+    if (config.localLogin !== true) {
+      return { ok: false, method: "session", failureReason: "session_local_login_off" };
+    }
+    if (!passesConsoleRequestChecks(request, issuerOrigin)) {
+      return { ok: false, method: "session", failureReason: "session_csrf_rejected" };
+    }
+    if (sessionTokens.length !== 1) return { ok: false, method: "session", failureReason: "session_invalid" };
+    try {
+      const resolved = await resolveSessionUser(sessionTokens[0]!);
+      if (typeof resolved === "string") return { ok: false, method: "session", failureReason: resolved };
+      return { ok: true, method: "session", user: resolved };
+    } catch (error) {
+      console.error(`Admin session check failed unexpectedly:\n${describeErrorWithStack(error)}`);
+      return { ok: false, serverError: true };
+    }
+  }
+
+  // Writes the auth_failure audit row for a refused admin request and returns
+  // its response. Session failures never carry a caller-supplied label.
+  async function rejectAdminRequest(
+    authorization: Extract<AdminAuthorization, { ok: false }>,
+    actedBy: string | null,
+    sourceIp: string | null,
+  ): Promise<HandlerResult> {
+    if ("serverError" in authorization) return adminServerError();
+    await writeAdminAuditBestEffort({
+      action: "auth_failure",
+      targetUserId: null,
+      targetUsername: null,
+      changedFields: null,
+      result: "failure",
+      failureReason: authorization.failureReason,
+      actorLabel: authorization.method === "session" ? null : actedBy,
+      sourceIp,
+      authMethod: authorization.method,
+      actorUserId: null,
+    });
+    return adminUnauthorized();
+  }
+
+  // CONTRACT-011 §6: who an authorized admin action is attributed to. A
+  // session records the signed-in user and ignores any body actedBy.
+  function adminActor(
+    authorization: Extract<AdminAuthorization, { ok: true }>,
+    actedBy: string | null,
+  ): Pick<AdminAuditInput, "actorLabel" | "authMethod" | "actorUserId"> {
+    if (authorization.method === "session") {
+      return { actorLabel: authorization.user.username, authMethod: "session", actorUserId: authorization.user.id };
+    }
+    return { actorLabel: actedBy, authMethod: "token", actorUserId: null };
+  }
+
   async function writeAdminAuditBestEffort(input: AdminAuditInput): Promise<void> {
     try {
       await localUserStore.writeAdminAudit(input);
@@ -1145,34 +1307,34 @@ export function createRequestHandler(
 
   async function handleAdminCreateUser(request: IncomingMessage): Promise<HandlerResult> {
     const sourceIp = extractSourceIp(request);
-    // CONTRACT-006: public creation is explicitly enabled by the operator.
-    // The gate applies even to callers holding the admin bearer token.
-    if (config.allowNewLocalLoginCreation !== true) {
-      await writeAdminAuditBestEffort({
-        action: "create",
-        targetUserId: null,
-        targetUsername: null,
-        changedFields: null,
-        result: "failure",
-        failureReason: "creation_disabled",
-        actorLabel: null,
-        sourceIp,
-      });
-      return {
-        status: 403,
-        headers: ADMIN_USERS_RESPONSE_HEADERS,
-        body: JSON.stringify({ error: "New local account creation is disabled." }),
-      };
-    }
+    // CONTRACT-011 §7: an admin credential always authorizes creation. With
+    // no Authorization header and registration on, creation stays public
+    // (CONTRACT-006); every other request goes through §1 authorization,
+    // and a wrong token never falls back to public creation.
+    const isPublic = config.allowNewLocalLoginCreation === true && request.headers.authorization === undefined;
 
     // Require JSON so a cross-origin HTML form cannot submit a simple request.
-    if (request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+    const isJson = request.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() === "application/json";
+    if (isPublic && !isJson) {
       return { status: 415, headers: ADMIN_USERS_RESPONSE_HEADERS,
         body: JSON.stringify({ error: "Content-Type must be application/json." }) };
     }
-    const { parsed } = await readAdminRequestBody(request);
-    // Public callers cannot claim administrator attribution through actedBy.
-    const actedBy = "public-registration";
+    const { parsed, actedBy: bodyActedBy } = await readAdminRequestBody(request);
+
+    let actor: Pick<AdminAuditInput, "actorLabel" | "authMethod" | "actorUserId">;
+    if (isPublic) {
+      // Public callers cannot claim administrator attribution through actedBy.
+      actor = { actorLabel: "public-registration", authMethod: "public", actorUserId: null };
+    } else {
+      const authorization = await authorizeAdminRequest(request);
+      if (!authorization.ok) return rejectAdminRequest(authorization, bodyActedBy, sourceIp);
+      if (!isJson) {
+        return { status: 415, headers: ADMIN_USERS_RESPONSE_HEADERS,
+          body: JSON.stringify({ error: "Content-Type must be application/json." }) };
+      }
+      actor = adminActor(authorization, bodyActedBy);
+    }
+    const actedBy = actor.actorLabel;
 
     if (typeof parsed !== "object" || parsed === null) {
       return adminBadRequest("Request body must be a JSON object.");
@@ -1201,7 +1363,7 @@ export function createRequestHandler(
         changedFields: null,
         result: "success",
         failureReason: null,
-        actorLabel: actedBy,
+        ...actor,
         sourceIp,
       });
       return { status: 201, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify(created) };
@@ -1214,7 +1376,7 @@ export function createRequestHandler(
           changedFields: null,
           result: "failure",
           failureReason: "conflict",
-          actorLabel: actedBy,
+          ...actor,
           sourceIp,
         });
         return { status: 409, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify({ error: error.message }) };
@@ -1227,27 +1389,61 @@ export function createRequestHandler(
         changedFields: null,
         result: "failure",
         failureReason: "database_error",
-        actorLabel: actedBy,
+        ...actor,
         sourceIp,
       });
       return adminServerError();
     }
   }
 
-  async function handleAdminListUsers(request: IncomingMessage): Promise<HandlerResult> {
-    if (!checkAdminBearerAuth(request)) {
-      await writeAdminAuditBestEffort({
-        action: "auth_failure",
-        targetUserId: null,
-        targetUsername: null,
-        changedFields: null,
-        result: "failure",
-        failureReason: "bad_credential",
-        actorLabel: null,
-        sourceIp: extractSourceIp(request),
-      });
-      return adminUnauthorized();
+  // CONTRACT-011 §2: whether console sign-in can work, and who the caller's
+  // cookie belongs to if it would authorize an admin request. Rule 7 is not
+  // required: the response only describes the caller, and no other origin
+  // can read it. Not audited.
+  async function handleAdminSession(request: IncomingMessage): Promise<HandlerResult> {
+    const reason = config.allowNewLocalLoginCreation === true
+      ? "registration_open"
+      : config.localLogin !== true ? "local_login_off" : null;
+    let user: { id: string; username: string } | null = null;
+    const sessionTokens = readSessionCookies(request);
+    if (reason === null && sessionTokens.length === 1) {
+      try {
+        const resolved = await resolveSessionUser(sessionTokens[0]!);
+        if (typeof resolved !== "string") user = resolved;
+      } catch (error) {
+        console.error(`Admin session status failed unexpectedly:\n${describeErrorWithStack(error)}`);
+        return adminServerError();
+      }
     }
+    return {
+      status: 200,
+      headers: ADMIN_USERS_RESPONSE_HEADERS,
+      body: JSON.stringify({
+        sessionAdmin: reason === null ? "available" : "unavailable",
+        reason,
+        signedIn: user !== null,
+        user,
+      }),
+    };
+  }
+
+  // CONTRACT-011 §4: clears bt_session for every *.biztechro.com app in this
+  // browser. The token itself stays valid until its exp. Not audited.
+  function handleLogout(request: IncomingMessage): HandlerResult {
+    if (!passesConsoleRequestChecks(request, issuerOrigin)) {
+      return { status: 403, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify({ error: "Forbidden" }) };
+    }
+    const cookieSecure = config.cookieSecure.trim().toLowerCase() === "true";
+    return {
+      status: 200,
+      headers: { ...ADMIN_USERS_RESPONSE_HEADERS, "Set-Cookie": buildClearSessionCookieHeader(cookieSecure) },
+      body: JSON.stringify({ status: "signed_out" }),
+    };
+  }
+
+  async function handleAdminListUsers(request: IncomingMessage): Promise<HandlerResult> {
+    const authorization = await authorizeAdminRequest(request);
+    if (!authorization.ok) return rejectAdminRequest(authorization, null, extractSourceIp(request));
     try {
       const users = await localUserStore.listUsers();
       // CONTRACT-005 §6/schema: reads are not part of the audited action
@@ -1260,19 +1456,8 @@ export function createRequestHandler(
   }
 
   async function handleAdminGetUser(request: IncomingMessage, targetId: string): Promise<HandlerResult> {
-    if (!checkAdminBearerAuth(request)) {
-      await writeAdminAuditBestEffort({
-        action: "auth_failure",
-        targetUserId: null,
-        targetUsername: null,
-        changedFields: null,
-        result: "failure",
-        failureReason: "bad_credential",
-        actorLabel: null,
-        sourceIp: extractSourceIp(request),
-      });
-      return adminUnauthorized();
-    }
+    const authorization = await authorizeAdminRequest(request);
+    if (!authorization.ok) return rejectAdminRequest(authorization, null, extractSourceIp(request));
     try {
       const record = await localUserStore.getUserById(targetId);
       if (record === undefined) return adminNotFound(); // read action — no audit row, see handleAdminListUsers.
@@ -1287,19 +1472,9 @@ export function createRequestHandler(
     const sourceIp = extractSourceIp(request);
     const { parsed, actedBy } = await readAdminRequestBody(request);
 
-    if (!checkAdminBearerAuth(request)) {
-      await writeAdminAuditBestEffort({
-        action: "auth_failure",
-        targetUserId: null,
-        targetUsername: null,
-        changedFields: null,
-        result: "failure",
-        failureReason: "bad_credential",
-        actorLabel: actedBy,
-        sourceIp,
-      });
-      return adminUnauthorized();
-    }
+    const authorization = await authorizeAdminRequest(request);
+    if (!authorization.ok) return rejectAdminRequest(authorization, actedBy, sourceIp);
+    const actor = adminActor(authorization, actedBy);
 
     if (typeof parsed !== "object" || parsed === null) {
       return adminBadRequest("Request body must be a JSON object.");
@@ -1357,7 +1532,7 @@ export function createRequestHandler(
           changedFields: null,
           result: "failure",
           failureReason: "not_found",
-          actorLabel: actedBy,
+          ...actor,
           sourceIp,
         });
         return adminNotFound();
@@ -1369,7 +1544,7 @@ export function createRequestHandler(
         changedFields: updateResult.changedFields.join(","),
         result: "success",
         failureReason: null,
-        actorLabel: actedBy,
+        ...actor,
         sourceIp,
       });
       return { status: 200, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify(updateResult.record) };
@@ -1382,7 +1557,7 @@ export function createRequestHandler(
           changedFields: null,
           result: "failure",
           failureReason: "conflict",
-          actorLabel: actedBy,
+          ...actor,
           sourceIp,
         });
         return { status: 409, headers: ADMIN_USERS_RESPONSE_HEADERS, body: JSON.stringify({ error: error.message }) };
@@ -1395,7 +1570,7 @@ export function createRequestHandler(
         changedFields: null,
         result: "failure",
         failureReason: "database_error",
-        actorLabel: actedBy,
+        ...actor,
         sourceIp,
       });
       return adminServerError();
@@ -1405,21 +1580,11 @@ export function createRequestHandler(
   async function handleAdminDeleteUser(request: IncomingMessage, targetId: string): Promise<HandlerResult> {
     const sourceIp = extractSourceIp(request);
     // CONTRACT-005 Interfaces documents no request body for DELETE, so
-    // (unlike POST/PATCH above) no body is read here — actedBy is always
-    // null for this endpoint's audit rows.
-    if (!checkAdminBearerAuth(request)) {
-      await writeAdminAuditBestEffort({
-        action: "auth_failure",
-        targetUserId: null,
-        targetUsername: null,
-        changedFields: null,
-        result: "failure",
-        failureReason: "bad_credential",
-        actorLabel: null,
-        sourceIp,
-      });
-      return adminUnauthorized();
-    }
+    // (unlike POST/PATCH above) no body is read here — a token-authorized
+    // delete records no actor label; a session records the signed-in user.
+    const authorization = await authorizeAdminRequest(request);
+    if (!authorization.ok) return rejectAdminRequest(authorization, null, sourceIp);
+    const actor = adminActor(authorization, null);
     try {
       const deleted = await localUserStore.deleteUser(targetId);
       if (deleted === undefined) {
@@ -1430,7 +1595,7 @@ export function createRequestHandler(
           changedFields: null,
           result: "failure",
           failureReason: "not_found",
-          actorLabel: null,
+          ...actor,
           sourceIp,
         });
         return adminNotFound();
@@ -1442,7 +1607,7 @@ export function createRequestHandler(
         changedFields: null,
         result: "success",
         failureReason: null,
-        actorLabel: null,
+        ...actor,
         sourceIp,
       });
       return {
@@ -1459,7 +1624,7 @@ export function createRequestHandler(
         changedFields: null,
         result: "failure",
         failureReason: "database_error",
-        actorLabel: null,
+        ...actor,
         sourceIp,
       });
       return adminServerError();
@@ -1558,6 +1723,23 @@ export function createRequestHandler(
       response.writeHead(200, { ...LOCAL_LOGIN_FORM_RESPONSE_HEADERS, "Cache-Control": "no-store" });
       response.end(page.replace("<!-- LOCAL_USERS_LIST -->", () => usersHtml));
       return;
+    }
+
+    // CONTRACT-011 §2/§4: both available in either login mode.
+    {
+      const sessionPath = (request.url ?? "").split("?")[0];
+      if (request.method === "GET" && sessionPath === "/admin/session") {
+        const result = await handleAdminSession(request);
+        response.writeHead(result.status, result.headers);
+        response.end(result.body);
+        return;
+      }
+      if (request.method === "POST" && sessionPath === "/auth/logout") {
+        const result = handleLogout(request);
+        response.writeHead(result.status, result.headers);
+        response.end(result.body);
+        return;
+      }
     }
 
     // CONTRACT-005 §4/§7: /admin/users* is reachable regardless of

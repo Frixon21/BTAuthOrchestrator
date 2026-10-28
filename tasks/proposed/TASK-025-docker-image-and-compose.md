@@ -6,11 +6,16 @@ Proposed by: Patrick Moon
 Proposed date: 2026-10-20
 Approved by:
 Approved date:
-Related contracts: CONTRACT-008 (from TASK-024; supersedes CONTRACT-007)
-Related ADRs: none
-Dependencies: TASK-024 (CONTRACT-008 approved). Overlaps TASK-003d (see
-Context). Real certificate issuance remains blocked on the Cloudflare API
-credential, the same blocker as TASK-003d.
+Related contracts: CONTRACT-008 (Approved 2026-10-28; supersedes
+CONTRACT-007, now Retired); CONTRACT-011 (console sign-in, which works only
+at a `biztechro.com` host and is therefore first usable through this
+deployment)
+Related ADRs: ADR-001
+Dependencies: CONTRACT-008 approved (done 2026-10-28). TASK-028 should be
+accepted first: both change `src/index.ts`/`src/database.ts`, and TASK-028
+adds an audit-table migration. Overlaps TASK-003d (see Context). Real
+certificate issuance remains blocked on the Cloudflare API credential, the
+same blocker as TASK-003d.
 
 ## Desired outcome
 
@@ -44,6 +49,36 @@ Patrick's decisions (2026-10-20):
   (`"<ORCA_IP>:443:443"`, `"<ORCA_IP>:80:80"`). Internal DNS for
   `orca.biztechro.com` points at that IP.
 
+Patrick's answers to CONTRACT-008's open questions (2026-10-28). Where an
+answer differs from the contract body's draft text, the answer governs:
+
+- **OQ-1, input channels: environment variables only.** No `*_FILE`
+  variants are implemented, so §7.2's `*_FILE` rules and the "exactly one
+  channel" check do not apply. Every input, including `DB_ENCRYPTION_KEY`,
+  the two tokens, `CLIENT_SECRET` and `INITIAL_LOCAL_USER_*`, comes from the
+  container environment. The exposure tradeoff (values visible in
+  `docker inspect` and the TrueNAS app configuration) is accepted.
+- **OQ-2:** seed inputs left set after seeding are ignored with a per-start
+  warning naming them.
+- **OQ-3:** as recommended. The CLI's `--client-secret-file` and
+  `--local-user-file` keep read-then-unlink unchanged; with OQ-1 there are no
+  container secret files to protect.
+- **OQ-4:** option (a), a separate `--non-interactive` seed mode that exits 0
+  when already seeded; the plain CLI keeps its non-zero exit.
+- **OQ-5:** default UID:GID `568:568`, operator override through compose
+  `user:` allowed, UID 0 refused in container mode, never auto-`chown`.
+- **OQ-6:** option (b), the liveness-socket stale-lock mechanism, on POSIX
+  hosts and in containers; Windows keeps today's behavior.
+- **OQ-7:** Docker's default stop grace period; no `stop_grace_period`.
+- **OQ-8:** CONTRACT-008 also supersedes CONTRACT-005 §5's input-channel
+  sentence for container first boot.
+- **OQ-9:** option (a). Trusted-proxy `X-Forwarded-For` handling is deferred
+  to a follow-up task (number to be assigned; OQ-9's "TASK-026" is taken).
+  Until it exists, Caddy must not be configured with `trusted_proxies` and
+  Cloudflare proxying must not be enabled.
+- **OQ-10:** a `PGLITE_DATA_DIR` other than `/data`, or no operator mount at
+  `/data`, fails closed in container mode.
+
 **Relationship to TASK-003d:** TASK-003d stays separate and remains blocked
 on the Cloudflare side; testing is internal-only for now. This task
 therefore ships Caddy in a mode that works without Cloudflare, using Caddy's
@@ -57,15 +92,22 @@ credential exists. This task does not edit TASK-003d.
 
 ### Included
 
-- Multi-stage `Dockerfile`: a build stage (`npm ci`, `tsc`) and a slim Node
-  runtime stage (`npm ci --omit=dev`). Runs as non-root,
-  `PGLITE_DATA_DIR=/data`, `VOLUME /data`, `HEALTHCHECK` on `GET /health`.
+- Multi-stage `Dockerfile`: a build stage (`npm ci`, then `npm run build`,
+  which also copies the admin console files to `dist/console/`; bare `tsc`
+  would leave `/admin/console` returning 500) and a slim Node runtime stage
+  (`npm ci --omit=dev`) that copies `dist/` including `dist/console/`, and
+  `scripts/`. Runs as non-root (`568:568` by default),
+  `PGLITE_DATA_DIR=/data`, `HEALTHCHECK` on `GET /health`. Whether to declare
+  `VOLUME /data` is settled against OQ-10: an anonymous volume must not
+  silently satisfy a missing operator mount.
 - `.dockerignore` excluding `.env`, `data/`, `node_modules/`, `dist/`,
   `.git/`.
 - Container entrypoint implementing CONTRACT-008's first-boot seed and
   normal-start behavior.
-- Seed/database code changes required by CONTRACT-008 (input channels,
-  read-only secret files, exit status, stale-lock recovery).
+- Seed/database code changes required by CONTRACT-008 as answered:
+  environment-only container inputs (OQ-1), the `--non-interactive` seed
+  mode (OQ-4), seed-input warnings (OQ-2), root refusal (OQ-5), data-path
+  guards (OQ-10) and liveness-socket stale-lock recovery (OQ-6).
 - Caddy `Dockerfile` (`caddy:builder` + `xcaddy --with
   github.com/caddy-dns/cloudflare`) and a `Caddyfile` reverse-proxying
   `orca.biztechro.com` to `app:3000`. It defaults to `tls internal`, with
@@ -88,10 +130,17 @@ credential exists. This task does not edit TASK-003d.
 
 ## Plan
 
-To be finalised once CONTRACT-008 is approved. Expected shape: Dockerfile and
-.dockerignore → entrypoint and contract-required code changes → Caddy image
-and Caddyfile → compose file → docs → validation on a local Docker host, then
-on TrueNAS.
+1. Contract code changes, testable without Docker: liveness-socket lock
+   (OQ-6), `--non-interactive` seed mode and environment inputs (OQ-1/2/4),
+   container-mode guards (OQ-5/10). Unit tests in the style of the existing
+   `scripts/test-*.js`.
+2. Node 22 bump (`engines.node`, `@types/node`); rerun every test script.
+3. `Dockerfile`, `.dockerignore` and entrypoint.
+4. Caddy image and `Caddyfile` (`tls internal`, Cloudflare block present but
+   disabled, no `trusted_proxies`).
+5. `docker-compose.yml` for "Install via YAML", operator values marked.
+6. Docs.
+7. Validation on a local Docker host, then on TrueNAS.
 
 ## Acceptance criteria
 
@@ -106,6 +155,13 @@ on TrueNAS.
       data path are still refused.
 - [ ] The Node service publishes no host port; `/health` is reachable
       through Caddy.
+- [ ] `/admin/console` and its three assets load through Caddy, and console
+      sign-in (CONTRACT-011) works at `https://orca.biztechro.com` once the
+      client trusts Caddy's internal root CA.
+- [ ] A client-supplied `X-Forwarded-For` sent through Caddy does not appear
+      as `source_ip` in `local_login_audit` (CONTRACT-008 §8).
+- [ ] Running as UID 0, a `PGLITE_DATA_DIR` other than `/data`, or no
+      operator mount at `/data` each fail closed.
 - [ ] `docker stop` produces a clean shutdown (existing SIGTERM handling).
 - [ ] No secret value is baked into an image layer or committed to the repo.
 - [ ] Container deployment is documented, including TrueNAS host-path
@@ -132,13 +188,39 @@ once the Cloudflare credential is available (TASK-003d's blocker).
   documented, not worked around.
 - Host-path ownership must match the container UID (TrueNAS convention
   `568:568`), or CONTRACT-008's permission check fails closed at startup.
+- **Open question — restricting `/admin/*` at Caddy.** Everything under
+  `/admin/` (console, user-management API, `/admin/reset-password`,
+  emergency rotation) is administrative and is otherwise reachable by anyone
+  who can reach the dedicated IP, protected only by tokens and, after
+  TASK-028, by local user passwords. End users and consuming apps need only
+  `/auth/*` and `/.well-known/jwks.json`. Caddy could serve `/admin/*` only
+  to LAN/VPN source ranges. While deployment is internal-only (`tls
+  internal`, LAN IP) this adds little; Patrick to decide before the service
+  is reachable from the internet (e.g. when TASK-003d enables Cloudflare).
 - Moving to Node 22: `package.json`'s `engines` and `@types/node` should be
-  bumped to match. Run the existing verify scripts on 22 before relying on
-  it.
+  bumped to match. Run every test script on 22 before relying on it,
+  including `test-admin-console.js`, `test-local-password-change.js` and
+  `test-console-sign-in.js`.
+- **Environment-only secrets (OQ-1).** `DB_ENCRYPTION_KEY` and the tokens are
+  visible to anyone who can run `docker inspect` or open the app's TrueNAS
+  configuration, for the life of the install. Docs should say so and tell
+  operators to remove `CLIENT_SECRET` and `INITIAL_LOCAL_USER_PASSWORD` after
+  the first successful boot (OQ-2).
+- **CONTRACT-008's body still describes `*_FILE` channels.** The approved
+  OQ-1 answer overrides them; per ADR-001 the body is not edited. Reviewers
+  should read the answers alongside §7.2.
+- **Audit-table growth on the host volume.** The local-login and admin audit
+  tables are never pruned (TASK-014); on TrueNAS they grow on the host
+  dataset.
 
 ## Blocker
 
-Blocked until TASK-024 produces an approved CONTRACT-008.
+None in the repository since CONTRACT-008's approval (2026-10-28). Ready
+for Patrick's approval. Before validating on TrueNAS, Patrick needs to:
+add the dedicated IP alias, confirm the TrueNAS web UI does not bind that
+IP, create the host dataset owned by `568:568`, and point internal DNS for
+`orca.biztechro.com` at the IP. A local Docker host is needed for the first
+validation pass.
 
 ## Implementation handoff
 
@@ -147,7 +229,3 @@ Not started.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

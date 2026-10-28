@@ -7,6 +7,10 @@ Related tasks: TASK-020
 Related ADRs: ADR-001
 Supersedes: CONTRACT-005 only for HTTP user creation authorization and the
 prohibition on self-service registration; all other behavior remains in force.
+Superseded by: CONTRACT-011 for the 403 returned to admin-token creation while
+creation is disabled, and for public-registration attribution of
+token-authorized creation while it is enabled. All other behavior remains in
+force.
 
 ## Required behavior
 

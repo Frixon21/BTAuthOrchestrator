@@ -371,7 +371,3 @@ None required. For awareness: `/admin/reset-password` appears in the public
 `/api/docs` OpenAPI document. The contract's Interfaces section requires the
 OpenAPI document to describe it, and this is not a hyperlink from a public
 page, so it is not treated as a defect.
-
-## Human acceptance
-
-Pending.

@@ -1,12 +1,15 @@
-// BT Auth Orchestrator admin console (CONTRACT-010).
+// BT Auth Orchestrator admin console (CONTRACT-010, CONTRACT-011).
 //
 // Safety rules for this file:
 // - All dynamic text is written with textContent or text nodes. HTML-parsing
 //   APIs and string-built code are never used.
 // - Element styling changes only through classes and the hidden attribute.
-// - Each bearer token is sent only to its own endpoints (see tokenKindFor).
+// - Each bearer token is sent only to its own endpoints (see credentialFor).
+//   While signed in, user requests rely on the bt_session cookie instead and
+//   carry no Authorization header.
 // - Tokens and the acting-as label live in sessionStorage, or in memory when
-//   sessionStorage is unavailable. Passwords are never stored.
+//   sessionStorage is unavailable. Passwords are never stored. The session
+//   cookie is HttpOnly; this script never reads or writes it.
 (function () {
   "use strict";
 
@@ -22,6 +25,15 @@
   var TOKEN_NAMES = { admin: "User-admin token", emergency: "Emergency token" };
   var SECTIONS = ["overview", "users", "keys", "settings"];
   var NETWORK_ERROR = "Unable to reach the service. Check the connection and try again.";
+  // CONTRACT-011 §1 rule 7: required on every cookie-authorized request.
+  var CONSOLE_HEADER = "X-BT-Admin-Console";
+  var UNAVAILABLE_REASONS = {
+    registration_open: "Console sign-in is turned off while public registration is on. Use the user-admin token.",
+    local_login_off: "Console sign-in needs local login mode. Use the user-admin token."
+  };
+  var COOKIE_NOT_KEPT = "You signed in, but this browser did not keep the session cookie. " +
+    "Open the console at its biztechro.com address, using HTTPS if secure cookies are required, or use the user-admin token instead.";
+  var SESSION_ENDED = "Your console sign-in is no longer accepted. Sign in again, or use the user-admin token.";
 
   function byId(id) { return doc.getElementById(id); }
   function each(list, fn) { Array.prototype.forEach.call(list, fn); }
@@ -87,7 +99,10 @@
 
   function getToken(kind) { return sessionStore.get(STORAGE_KEYS[kind]) || ""; }
   function hasToken(kind) { return getToken(kind) !== ""; }
+  // CONTRACT-011 §5: while signed in the label is not sent; the server
+  // records the signed-in user instead.
   function actingAs() {
+    if (state.session.signedIn) return "";
     var label = sessionStore.get(STORAGE_KEYS.actingAs) || "";
     return label.trim() === "" ? "" : label;
   }
@@ -140,27 +155,41 @@
   }
 
   // ---------------------------------------------------------------------
-  // API client. tokenKindFor is the only place that decides whether a
-  // request carries a token, and which one (CONTRACT-010 Inputs and outputs).
+  // API client. credentialFor is the only place that decides which
+  // credential a request may use (CONTRACT-010 and CONTRACT-011 Inputs and
+  // outputs). User requests use the session when signed in, otherwise the
+  // user-admin token. Creating a user needs neither while public
+  // registration is on.
   // ---------------------------------------------------------------------
-  function tokenKindFor(method, path) {
-    if (method === "POST" && path === "/admin/emergency-rotate-keys") return "emergency";
-    if (path === "/admin/users") return method === "POST" ? null : "admin";
-    if (path.indexOf("/admin/users/") === 0) return "admin";
-    return null;
+  function credentialFor(method, path) {
+    if (method === "POST" && path === "/admin/emergency-rotate-keys") return { kind: "emergency", optional: false };
+    if (path === "/admin/users") {
+      return { kind: "admin", optional: method === "POST" && state.session.reason === "registration_open" };
+    }
+    if (path.indexOf("/admin/users/") === 0) return { kind: "admin", optional: false };
+    return { kind: null, optional: true };
   }
+
+  function canManageUsers() { return state.session.signedIn || hasToken("admin"); }
 
   function userPath(id) { return "/admin/users/" + encodeURIComponent(id); }
 
   async function api(method, path, body) {
-    var kind = tokenKindFor(method, path);
+    var credential = credentialFor(method, path);
     var headers = {};
-    if (kind !== null) {
-      if (!hasToken(kind)) {
-        return { ok: false, status: 0, missingToken: kind,
-          error: "Add the " + TOKEN_NAMES[kind].toLowerCase() + " in Settings first." };
-      }
-      headers.Authorization = "Bearer " + getToken(kind);
+    // used: "session", a token kind, or null when no credential is sent.
+    var used = null;
+    if (credential.kind === "admin" || path === "/auth/logout") headers[CONSOLE_HEADER] = "1";
+    if (credential.kind === "admin" && state.session.signedIn) {
+      used = "session";
+    } else if (credential.kind !== null && hasToken(credential.kind)) {
+      used = credential.kind;
+      headers.Authorization = "Bearer " + getToken(credential.kind);
+    } else if (credential.kind !== null && !credential.optional) {
+      return { ok: false, status: 0, missingToken: credential.kind,
+        error: credential.kind === "admin"
+          ? "Sign in, or add the user-admin token in Settings, first."
+          : "Add the " + TOKEN_NAMES[credential.kind].toLowerCase() + " in Settings first." };
     }
     var init = { method: method, headers: headers, cache: "no-store" };
     if (body !== undefined) {
@@ -182,10 +211,15 @@
       parsed = false;
     }
     var status = response.status;
-    if (status === 401 && kind !== null) {
-      rejectToken(kind);
-      return { ok: false, status: status, unauthorized: kind,
-        error: TOKEN_NAMES[kind] + " was rejected and has been forgotten. Enter it again in Settings." };
+    if (status === 401 && used === "session") {
+      // A session 401 never clears a saved token (CONTRACT-011 §5).
+      sessionEnded();
+      return { ok: false, status: status, unauthorized: "session", error: SESSION_ENDED };
+    }
+    if (status === 401 && used !== null) {
+      rejectToken(used);
+      return { ok: false, status: status, unauthorized: used,
+        error: TOKEN_NAMES[used] + " was rejected and has been forgotten. Enter it again in Settings." };
     }
     if (response.ok && parsed) return { ok: true, status: status, data: data };
     if (!response.ok && parsed && status < 500 && typeof data.error === "string" && data.error !== "") {
@@ -219,7 +253,7 @@
     tokenInput(kind).value = "";
     setReveal(kind, false);
     if (!quiet) setMessage(kind + "-token-message", TOKEN_NAMES[kind] + " forgotten.", "info");
-    if (kind === "admin") resetUsersData();
+    if (kind === "admin" && !state.session.signedIn) resetUsersData();
     syncControls();
   }
 
@@ -259,7 +293,10 @@
     usersLoading: false,
     detail: null,
     detailId: null,
-    keys: null
+    keys: null,
+    // CONTRACT-011 §2, from GET /admin/session. known is false until the
+    // first check succeeds.
+    session: { known: false, available: false, reason: null, signedIn: false, user: null }
   };
 
   function syncControls() {
@@ -279,11 +316,15 @@
       byId(kind + "-token-status").classList.toggle("is-set", present);
     });
 
-    byId("users-token-prompt").hidden = admin;
-    byId("users-refresh").disabled = !admin || state.usersLoading;
-    byId("users-filter").disabled = !admin;
+    var canManage = canManageUsers();
+    byId("users-token-prompt").hidden = canManage;
+    byId("users-refresh").disabled = !canManage || state.usersLoading;
+    byId("users-filter").disabled = !canManage;
+    byId("signin-submit").disabled = busy.signin === true;
+    byId("quick-signin-submit").disabled = busy.signin === true;
+    byId("signout").disabled = busy.signout === true;
     var detail = state.detail;
-    var detailReady = admin && detail !== null;
+    var detailReady = canManage && detail !== null;
     byId("email-submit").disabled = !detailReady || busy.email === true;
     byId("status-toggle").disabled = !detailReady || busy.status === true;
     byId("reset-submit").disabled = !detailReady || busy.reset === true;
@@ -334,7 +375,7 @@
       else tab.removeAttribute("aria-current");
     });
     if (moveFocus) byId(name + "-heading").focus();
-    if (name === "users" && hasToken("admin") && state.users === null && !state.usersLoading) loadUsers();
+    if (name === "users" && canManageUsers() && state.users === null && !state.usersLoading) loadUsers();
     if (name === "keys" && state.keys === null) loadKeys();
   }
 
@@ -458,7 +499,7 @@
     clear(byId("users-tbody"));
     byId("users-table-wrap").hidden = true;
     byId("users-count").textContent = "";
-    setListState("users-state", "Add the user-admin token to load users.");
+    setListState("users-state", "Sign in or add the user-admin token to load users.");
     showListView(false);
   }
 
@@ -467,7 +508,7 @@
   }
 
   async function loadUsers() {
-    if (!hasToken("admin")) { resetUsersData(); return; }
+    if (!canManageUsers()) { resetUsersData(); return; }
     state.usersLoading = true;
     syncControls();
     setListState("users-state", "Loading users...", "loading");
@@ -694,7 +735,7 @@
   function submitDelete(event) {
     event.preventDefault();
     var user = state.detail;
-    if (user === null || byId("delete-confirm").value !== user.username || !hasToken("admin")) return;
+    if (user === null || byId("delete-confirm").value !== user.username || !canManageUsers()) return;
     runAction("delete", byId("delete-submit"), "Deleting...", async function () {
       var result = await api("DELETE", userPath(user.id));
       if (result.ok) {
@@ -753,14 +794,127 @@
           setMessage("create-message", "");
           closeDialog();
           showToast(text, "success");
-        } else if (result.status === 403) {
-          setMessage("create-message", "Creating users needs ALLOW_NEW_LOCAL_LOGIN_CREATION=true in the service configuration, followed by a restart. The service said: " + result.error, "error");
         } else {
           setMessage("create-message", result.ok ? "The service returned an unexpected response." : result.error, "error");
         }
       } finally {
         password = "";
         clearCreatePasswords();
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Console sign-in (CONTRACT-011 §2-§5).
+  // ---------------------------------------------------------------------
+  function readSession(data) {
+    if (data === null || typeof data !== "object" ||
+      (data.sessionAdmin !== "available" && data.sessionAdmin !== "unavailable")) return null;
+    var user = data.user !== null && typeof data.user === "object" && typeof data.user.username === "string"
+      ? { id: String(data.user.id), username: data.user.username } : null;
+    return {
+      known: true,
+      available: data.sessionAdmin === "available",
+      reason: typeof data.reason === "string" ? data.reason : null,
+      signedIn: data.signedIn === true && user !== null,
+      user: user
+    };
+  }
+
+  async function refreshSession() {
+    var wasSignedIn = state.session.signedIn;
+    var result = await api("GET", "/admin/session");
+    state.session = (result.ok && readSession(result.data)) ||
+      { known: false, available: false, reason: null, signedIn: false, user: null };
+    renderSession();
+    if (wasSignedIn !== state.session.signedIn) {
+      resetUsersData();
+      if (state.section === "users" && canManageUsers()) loadUsers();
+    }
+    syncControls();
+    return state.session;
+  }
+
+  function renderSession() {
+    var session = state.session;
+    var name = session.signedIn ? String(session.user.username) : "";
+    var chip = byId("chip-session");
+    chip.textContent = session.signedIn ? "Signed in: " + name : "Not signed in";
+    chip.classList.toggle("chip-on", session.signedIn);
+    byId("overview-session").textContent = "Console sign-in: " +
+      (session.signedIn ? "signed in as " + name : session.available ? "not signed in" : "unavailable");
+    var status = byId("session-status");
+    status.textContent = session.signedIn ? "Signed in as " + name
+      : session.available ? "Not signed in" : session.known ? "Unavailable" : "Could not be checked";
+    status.classList.toggle("is-set", session.signedIn);
+
+    var unavailable = "";
+    if (!session.known) unavailable = "The console could not check sign-in. Refresh the Overview to try again, or use the user-admin token.";
+    else if (!session.available) unavailable = UNAVAILABLE_REASONS[session.reason] ||
+      "Console sign-in is unavailable. Use the user-admin token.";
+    byId("session-unavailable").textContent = unavailable;
+    byId("session-unavailable").hidden = unavailable === "";
+
+    byId("signin-form").hidden = session.signedIn || !session.available;
+    byId("signed-in-view").hidden = !session.signedIn;
+    byId("quick-signin-form").hidden = session.signedIn || !session.available;
+    byId("users-prompt-text").textContent = session.available
+      ? "Sign in, or add the user-admin token in Settings, to list and manage users."
+      : (unavailable + " Add it in Settings to list and manage users.");
+    // The acting-as label is not used while signed in (CONTRACT-011 §5).
+    byId("acting-form").hidden = session.signedIn;
+  }
+
+  function sessionEnded() {
+    state.session.signedIn = false;
+    state.session.user = null;
+    renderSession();
+    setMessage("signin-message", SESSION_ENDED, "error");
+    showToast(SESSION_ENDED, "error", true);
+    refreshSession();
+  }
+
+  function submitSignIn(prefix) {
+    return function (event) {
+      event.preventDefault();
+      if (busy.signin === true) return;
+      var username = byId(prefix + "-username").value.trim();
+      var password = byId(prefix + "-password").value;
+      var messageId = prefix === "signin" ? "signin-message" : "quick-signin-message";
+      if (username === "" || password === "") {
+        byId(prefix + "-password").value = "";
+        setMessage(messageId, "Enter your username and password.", "error");
+        return;
+      }
+      runAction("signin", byId(prefix + "-submit"), "Signing in...", async function () {
+        try {
+          var result = await api("POST", "/auth/local-login", { username: username, password: password });
+          if (!result.ok) { setMessage(messageId, result.error, "error"); return; }
+          var session = await refreshSession();
+          if (session.signedIn) {
+            byId(prefix + "-username").value = "";
+            setMessage(messageId, "");
+            setMessage("signin-message", "Signed in as " + String(session.user.username) + ".", "success");
+            showToast("Signed in as " + String(session.user.username) + ".", "success");
+          } else {
+            setMessage(messageId, COOKIE_NOT_KEPT, "error");
+          }
+        } finally {
+          password = "";
+          byId(prefix + "-password").value = "";
+        }
+      });
+    };
+  }
+
+  function signOut() {
+    runAction("signout", byId("signout"), "Signing out...", async function () {
+      var result = await api("POST", "/auth/logout");
+      if (result.ok) {
+        await refreshSession();
+        setMessage("signin-message", "Signed out. This browser is signed out of every BizTech app.", "success");
+      } else {
+        setMessage("signin-message", result.error, "error");
       }
     });
   }
@@ -904,7 +1058,10 @@
     });
     on("toast-dismiss", "click", hideToast);
 
-    on("overview-refresh", "click", function () { loadOverview(); });
+    on("overview-refresh", "click", function () { loadOverview(); refreshSession(); });
+    on("signin-form", "submit", submitSignIn("signin"));
+    on("quick-signin-form", "submit", submitSignIn("quick-signin"));
+    on("signout", "click", signOut);
 
     on("users-refresh", "click", function () { loadUsers(); });
     on("users-filter", "input", function () { if (state.users !== null) renderUsers(); });
@@ -953,8 +1110,10 @@
 
     byId("storage-notice").hidden = sessionStore.persistent();
     syncControls();
+    renderSession();
     showSection("overview", false);
     loadOverview();
+    refreshSession();
   }
 
   if (doc.readyState === "loading") doc.addEventListener("DOMContentLoaded", init);

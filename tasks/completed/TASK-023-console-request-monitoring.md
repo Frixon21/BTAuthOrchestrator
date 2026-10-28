@@ -67,7 +67,3 @@ docs/DEVELOPMENT.md ("Console monitoring").
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

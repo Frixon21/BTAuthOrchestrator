@@ -34,8 +34,10 @@ async function main() {
       assert.equal(Boolean(spec.paths['/auth/login']), !local);
       assert.equal(Boolean(spec.paths['/auth/callback']), !local);
       assert.match(spec.paths['/admin/users'].post.description, new RegExp(`currently ${registration ? 'enabled' : 'disabled'}`));
-      assert.equal(spec.paths['/admin/users'].post.security, undefined);
-      assert.deepEqual(spec.paths['/admin/users'].get.security, [{ LocalUserAdminToken: [] }]);
+      const userSecurity = [{ LocalUserAdminToken: [] }, { ConsoleSession: [] }];
+      assert.deepEqual(spec.paths['/admin/users'].post.security, registration ? [...userSecurity, {}] : userSecurity);
+      assert.deepEqual(spec.paths['/admin/users'].get.security, userSecurity);
+      assert.ok(spec.paths['/admin/session'].get); assert.ok(spec.paths['/auth/logout'].post);
       assert.deepEqual(spec.paths['/admin/emergency-rotate-keys'].post.security, [{ EmergencyRotationToken: [] }]);
       for (const secret of [environment.DB_ENCRYPTION_KEY, environment.EMERGENCY_ROTATION_TOKEN, environment.LOCAL_USER_ADMIN_TOKEN]) assert.equal(result.body.includes(secret), false);
       for (const path of ['/api/docs', '/api/docs/', '/docs', '/docs/']) {

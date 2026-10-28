@@ -447,7 +447,3 @@ Date: 2026-09-14
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

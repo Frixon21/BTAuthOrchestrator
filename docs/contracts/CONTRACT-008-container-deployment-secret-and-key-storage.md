@@ -1,8 +1,8 @@
 # CONTRACT-008: Encrypted secret & key storage in PGlite, with container deployment
 
-Status: Draft
-Approved by:
-Approved date:
+Status: Approved
+Approved by: Patrick
+Approved date: 2026-10-28
 Related tasks: TASK-024 (this contract's drafting task), TASK-025 (the
 container image/compose implementation that builds against this contract),
 TASK-005, TASK-006, TASK-008, TASK-009 (unaffected — see "Relationship to
@@ -1164,6 +1164,7 @@ admin tokens. The variable names in §7.2 also need confirming.
   `secrets:` is available only through "Install via YAML."
 - Both, as drafted: operators choose. If both are set for one input,
   startup fails closed.
+
 - **Recommendation:** both, with the documentation recommending `*_FILE`
   for `DB_ENCRYPTION_KEY` and the two tokens, which persist for the life of
   the install. Accept plain environment variables as a recorded tradeoff.
@@ -1174,7 +1175,7 @@ admin tokens. The variable names in §7.2 also need confirming.
   configuration code path. The first-boot seed inputs should be read only by
   the non-interactive mode, so that `CLIENT_SECRET` still never belongs in a
   host `.env`.
-
+**Answer: Environment only
 **OQ-2. Removing seed inputs after first boot: may, or must?**
 - May (as drafted): seed inputs set after seeding are ignored, with a
   per-start warning that names the variables.
@@ -1186,7 +1187,7 @@ admin tokens. The variable names in §7.2 also need confirming.
 - **Recommendation:** may, with the warning. Documentation should tell
   operators to remove `CLIENT_SECRET` and `INITIAL_LOCAL_USER_PASSWORD`
   once the first boot succeeds.
-
+**Answer: may
 **OQ-3. Read-only secret files.** CONTRACT-007's `--client-secret-file`
 must be deleted after reading, or the run aborts. Docker and TrueNAS mounts
 are typically read-only, so the delete always fails.
@@ -1197,7 +1198,7 @@ are typically read-only, so the delete always fails.
   - Attempt the unlink and tolerate failure. This silently weakens the CLI's
     guarantee.
   - Pass the CLI flags into the container. They would always abort.
-
+**Answer: for now lets go with your recommendation.
 **OQ-4. Exit status for "already seeded."**
 - (a), as drafted: a separate non-interactive mode returns 0 for already
   seeded, and the plain CLI keeps its non-zero exit.
@@ -1209,7 +1210,7 @@ are typically read-only, so the delete always fails.
   makes every future entrypoint encode a magic number. Option (c) mixes
   first-run input handling into the long-running server. Please also
   confirm the flag name (`--non-interactive` is proposed).
-
+**Answer:  yes option a
 **OQ-5. Container UID/GID versus the `0700`/owner check.**
 - The check itself works with any non-root UID. The decisions are:
   - (a) Is the default `568:568`? Yes, as drafted.
@@ -1227,7 +1228,7 @@ are typically read-only, so the delete always fails.
   auto-`chown`.
 - Also confirm that operators are responsible for the no-extended-ACL
   precondition. The service cannot see NFSv4 ACLs.
-
+**Answer: 568 is fine. there are many safeguards in truenas to deal with this.
 **OQ-6. Stale-lock mechanism (satisfying §6 S1–S8).**
 - (a) **Kernel-held advisory lock** (`flock`/`fcntl`) on a file in `/data`.
   The kernel releases it when the holder dies by any means, so no staleness
@@ -1255,14 +1256,14 @@ are typically read-only, so the delete always fails.
   systemd deployments have the same crash-loop problem. Keep Windows on
   today's behavior, with no stale-lock recovery, unless you want (c) there
   specifically.
-
+**Answer: option b
 **OQ-7. Shutdown grace period.** Docker's default stop grace period is
 10 seconds. If Node's shutdown ever takes longer, the stop ends in SIGKILL,
 which still recovers through §6.
 - **Recommendation:** no contract-level number. TASK-025 should set a
   modest `stop_grace_period` (for example 30 seconds) and confirm that
   `docker stop` exits cleanly.
-
+**Answer: I think dockers default grace is more then enough time.
 **OQ-8. CONTRACT-005 §5 interaction.** CONTRACT-005 §5 still governs
 first-local-user seeding. It allows only a hidden prompt or "a one-time,
 immediately-deleted input file." The container path in §7.4 adds an
@@ -1274,7 +1275,7 @@ sentence.
 - (b) Write a separate small contract superseding CONTRACT-005 §5.
 - **Recommendation:** (a). The change is narrow and makes sense only
   alongside §7.4.
-
+**Answer: option a
 **OQ-9. `X-Forwarded-For` trust.** As drafted, this contract records the
 deployment invariant (§8) but does not change extraction.
 - (a) Defer a trusted-proxy setting to a named follow-up, for example
@@ -1289,7 +1290,7 @@ deployment invariant (§8) but does not change extraction.
   proxying or Caddy `trusted_proxies` should be blocked on that follow-up.
   This matters because CONTRACT-005 §3's per-IP throttle, not only audit
   fidelity, depends on the address.
-
+**Answer: option a
 **OQ-10. Container data-path guards (smaller).**
 - Should a `PGLITE_DATA_DIR` other than `/data` fail closed in container
   mode? Recommendation: yes.
@@ -1299,7 +1300,7 @@ deployment invariant (§8) but does not change extraction.
   no new detection logic.
 - These go slightly beyond "`/data` is fixed" and so need your
   confirmation.
-
+**Answer: Yes to both
 ## Resolved decisions
 
 The following were judgment calls this contract made because TASK-003 did

@@ -169,7 +169,3 @@ README.md and docs/samples/external-app-integration.html.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

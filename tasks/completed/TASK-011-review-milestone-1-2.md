@@ -103,7 +103,3 @@ but not escalated first. A second, already-tracked, non-blocking item
 (TASK-003d's TLS provisioning still pending) is restated for visibility.
 See the full report for every finding, its severity, and the evidence behind
 it.
-
-## Human acceptance
-
-Pending.

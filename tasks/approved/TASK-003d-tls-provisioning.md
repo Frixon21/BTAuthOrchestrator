@@ -134,7 +134,3 @@ Not started.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

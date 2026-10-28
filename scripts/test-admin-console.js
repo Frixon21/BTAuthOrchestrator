@@ -1,5 +1,6 @@
 // Run after npm run build. CONTRACT-010 admin console: serving, static checks,
 // and console script behavior in a VM with DOM, fetch and storage stand-ins.
+// CONTRACT-011 console sign-in is driven through a fake cookie jar.
 // Uses an isolated temporary PGlite database; never loads .env or binds a socket.
 const assert = require('node:assert/strict');
 const { mkdtemp, rm, readFile } = require('node:fs/promises');
@@ -202,22 +203,41 @@ function viaHandler(handler) {
     return { ok: res.status >= 200 && res.status < 300, status: res.status, json: async () => JSON.parse(res.body) };
   };
 }
+// Like viaHandler, but keeps the bt_session cookie the way a browser at a
+// biztechro.com address would. keepCookies: false models a browser that
+// drops it (for example the console opened at localhost).
+function viaBrowser(handler, { keepCookies = true } = {}) {
+  let cookie = null;
+  return async call => {
+    const headers = Object.fromEntries(Object.entries(call.headers).map(([k, v]) => [k.toLowerCase(), v]));
+    if (cookie !== null) headers.cookie = cookie;
+    const res = await request(handler, call.url, call.method, call.body, headers);
+    const set = res.headers?.['Set-Cookie'];
+    if (keepCookies && typeof set === 'string') cookie = /Max-Age=0/.test(set) ? null : set.split(';')[0];
+    return { ok: res.status >= 200 && res.status < 300, status: res.status, json: async () => JSON.parse(res.body) };
+  };
+}
+// null: never a token. 'optional': the user-admin token or nothing (creation
+// while public registration is on, or while signed in).
 function expectedToken(method, url) {
   if (method === 'POST' && url === '/admin/emergency-rotate-keys') return EMERGENCY;
-  if (url === '/admin/users') return method === 'POST' ? null : ADMIN;
-  if (url.startsWith('/admin/users/')) return ADMIN;
+  if (url === '/admin/users' || url.startsWith('/admin/users/')) return 'optional';
   return null;
 }
 // Each token goes only to its own endpoints, and nowhere else in the page.
+// Every user request carries the console header (CONTRACT-011 §1 rule 7).
 function checkIsolation(env, { wrongTokens = [] } = {}) {
   for (const call of env.calls) {
     const expected = expectedToken(call.method, call.url);
     const auth = call.headers.Authorization;
-    if (expected === null) assert.equal(auth, undefined, `${call.method} ${call.url} must carry no token`);
+    if (expected === 'optional') {
+      assert.equal(call.headers['X-BT-Admin-Console'], '1', `${call.method} ${call.url} console header`);
+      assert.ok(auth === undefined || auth === `Bearer ${ADMIN}` || wrongTokens.some(t => auth === `Bearer ${t}`), `${call.method} ${call.url} token`);
+    } else if (expected === null) assert.equal(auth, undefined, `${call.method} ${call.url} must carry no token`);
     else assert.ok(auth === `Bearer ${expected}` || wrongTokens.some(t => auth === `Bearer ${t}`), `${call.method} ${call.url} token`);
     const serialized = JSON.stringify({ ...call, headers: { ...call.headers, Authorization: undefined } });
     for (const t of [ADMIN, EMERGENCY, ...wrongTokens]) assert.equal(serialized.includes(t), false, 'token outside Authorization');
-    if (expected === ADMIN) assert.equal(JSON.stringify(call).includes(EMERGENCY), false);
+    if (expected === 'optional') assert.equal(JSON.stringify(call).includes(EMERGENCY), false);
     if (expected === EMERGENCY) assert.equal(JSON.stringify(call).includes(ADMIN), false);
   }
   const visible = [];
@@ -319,7 +339,9 @@ async function main() {
     const live = createRequestHandler(secrets, loadConfig({ ...environment, ALLOW_NEW_LOCAL_LOGIN_CREATION: 'true' }), users);
     const env = await boot({ responder: viaHandler(live) });
     const { $ } = env;
-    assert.deepEqual(env.calls.map(c => `${c.method} ${c.url}`).sort(), ['GET /api/openapi.json', 'GET /health']);
+    assert.deepEqual(env.calls.map(c => `${c.method} ${c.url}`).sort(), ['GET /admin/session', 'GET /api/openapi.json', 'GET /health']);
+    assert.equal($('session-unavailable').textContent, 'Console sign-in is turned off while public registration is on. Use the user-admin token.');
+    assert.equal($('signin-form').hidden, true); assert.equal($('quick-signin-form').hidden, true);
     assert.equal($('health-status').textContent, 'Healthy');
     assert.equal($('mode-status').textContent, 'Local username and password');
     const modeLinks = () => env.document.querySelectorAll('[data-mode]').filter(li => !li.hidden).map(li => li.querySelector('a').getAttribute('href'));
@@ -332,7 +354,7 @@ async function main() {
     assert.equal(env.document.querySelector('[data-section="users"]').getAttribute('aria-current'), 'page');
     assert.equal(env.document.activeElement, $('users-heading'));
     assert.equal($('users-token-prompt').hidden, false); assert.equal($('users-refresh').disabled, true);
-    assert.equal(env.calls.length, 2);
+    assert.equal(env.calls.length, 3);
 
     // Settings: save tokens and the acting-as label.
     env.tab('settings');
@@ -348,7 +370,7 @@ async function main() {
     assert.equal(env.session.getItem(KEYS.actingAs), 'Operator Pat');
     assert.equal(env.local.map.size, 0, 'nothing but the theme goes to localStorage');
 
-    // Create (no token), with client-side checks first.
+    // Create with the saved token (CONTRACT-011 §7), with client-side checks first.
     env.tab('users'); await settle(env);
     let start = env.calls.length;
     assert.deepEqual(env.since(start - 1).map(c => `${c.method} ${c.url}`), ['GET /admin/users']);
@@ -362,13 +384,14 @@ async function main() {
     createFields('long-enough-password', 'long-enough-password'); env.click('create-submit');
     await settle(env);
     let [call] = env.since(start);
-    assert.equal(call.method, 'POST'); assert.equal(call.url, '/admin/users'); assert.equal(call.headers.Authorization, undefined);
+    assert.equal(call.method, 'POST'); assert.equal(call.url, '/admin/users'); assert.equal(call.headers.Authorization, `Bearer ${ADMIN}`);
     assert.deepEqual(body(call), { username: ' New.Admin ', email: 'new@example.test', password: 'long-enough-password', actedBy: 'Operator Pat' });
     assert.equal($('create-dialog').open, false); assert.equal($('create-password').value, ''); assert.equal($('create-confirm').value, '');
     assert.equal($('toast-text').textContent, 'Created user new.admin.');
     assert.equal($('announcer').textContent, 'Created user new.admin.');
     const created = (await users.listUsers()).find(u => u.username === 'new.admin');
     assert.ok(created);
+    assert.equal((await db.query("SELECT created_by FROM local_users WHERE username='new.admin'")).rows[0].created_by, 'Operator Pat');
 
     // List, markup rendered as text, filter.
     const rows = () => $('users-tbody').querySelectorAll('tr');
@@ -462,26 +485,90 @@ async function main() {
     assert.equal($('chip-admin').textContent, 'User-admin token: not set'); assert.equal($('chip-emergency').textContent, 'Emergency token: not set');
     console.log('PASS: every console action against the real API: exact method/URL/body/Authorization, token isolation, text rendering, typed confirmations, password clearing, Forget all');
 
-    // 403 on create with registration disabled (real API).
+    // Registration off: create still works with the user-admin token (CONTRACT-011 §7).
     const closed = createRequestHandler(secrets, loadConfig({ ...environment, ALLOW_NEW_LOCAL_LOGIN_CREATION: 'false' }), users);
-    const env403 = await boot({ responder: viaHandler(closed), session: new FakeStorage({ [KEYS.admin]: ADMIN }) });
-    env403.tab('users'); await settle(env403);
-    env403.click('users-new');
-    env403.type('create-username', 'blocked.user'); env403.type('create-email', 'b@example.test');
-    env403.type('create-password', 'long-enough-password'); env403.type('create-confirm', 'long-enough-password');
-    env403.click('create-submit'); await settle(env403);
-    const createCall = env403.calls.at(-1);
-    assert.equal(createCall.url, '/admin/users'); assert.equal(createCall.headers.Authorization, undefined, 'admin token never sent to POST /admin/users');
-    assert.match(env403.$('create-message').textContent, /ALLOW_NEW_LOCAL_LOGIN_CREATION=true.*restart.*New local account creation is disabled\./);
-    assert.equal(env403.$('create-password').value, ''); assert.equal(env403.$('create-confirm').value, '');
-    assert.equal(env403.$('create-dialog').open, true);
-    checkIsolation(env403);
-    console.log('PASS: 403 create explains the registration switch, shows API text, clears passwords, sends no token');
+    const envClosed = await boot({ responder: viaHandler(closed), session: new FakeStorage({ [KEYS.admin]: ADMIN }) });
+    envClosed.tab('users'); await settle(envClosed);
+    envClosed.click('users-new');
+    envClosed.type('create-username', 'token.user'); envClosed.type('create-email', 't@example.test');
+    envClosed.type('create-password', 'long-enough-password'); envClosed.type('create-confirm', 'long-enough-password');
+    envClosed.click('create-submit'); await settle(envClosed);
+    const createCall = envClosed.calls.at(-1);
+    assert.equal(createCall.url, '/admin/users'); assert.equal(createCall.headers.Authorization, `Bearer ${ADMIN}`);
+    assert.equal(envClosed.$('toast-text').textContent, 'Created user token.user.');
+    assert.equal(envClosed.$('create-password').value, ''); assert.equal(envClosed.$('create-confirm').value, '');
+    const tokenAudit = (await db.query("SELECT auth_method, actor_user_id FROM local_user_admin_audit WHERE action='create' AND target_username='token.user'")).rows[0];
+    assert.deepEqual({ ...tokenAudit }, { auth_method: 'token', actor_user_id: null });
+    checkIsolation(envClosed);
+    console.log('PASS: with registration off, create sends the user-admin token and succeeds with token attribution');
+
+    // Console sign-in (CONTRACT-011 §3-§6), against the real API with a cookie jar.
+    const envIn = await boot({ responder: viaBrowser(closed), session: new FakeStorage({ [KEYS.actingAs]: 'Forged Label' }) });
+    assert.equal(envIn.$('chip-session').textContent, 'Not signed in');
+    assert.equal(envIn.$('session-status').textContent, 'Not signed in');
+    envIn.tab('users');
+    assert.equal(envIn.$('users-token-prompt').hidden, false); assert.equal(envIn.$('quick-signin-form').hidden, false);
+    envIn.type('quick-signin-username', 'seeded.user'); envIn.type('quick-signin-password', 'wrong-password-123');
+    envIn.submit('quick-signin-form'); await settle(envIn);
+    assert.equal(envIn.$('quick-signin-message').textContent, 'Invalid username or password.');
+    assert.equal(envIn.$('quick-signin-password').value, '');
+    envIn.type('quick-signin-password', 'seeded-password-123'); envIn.submit('quick-signin-form'); await settle(envIn);
+    assert.equal(envIn.$('chip-session').textContent, 'Signed in: seeded.user');
+    assert.equal(envIn.$('quick-signin-password').value, '');
+    assert.equal(envIn.$('users-token-prompt').hidden, true); assert.equal(envIn.$('acting-form').hidden, true);
+    assert.ok(envIn.$('users-tbody').querySelectorAll('tr').length >= 2, 'users listed without a token');
+    start = envIn.calls.length;
+    envIn.click('users-new');
+    envIn.type('create-username', 'session.user'); envIn.type('create-email', 's@example.test');
+    envIn.type('create-password', 'long-enough-password'); envIn.type('create-confirm', 'long-enough-password');
+    envIn.click('create-submit'); await settle(envIn);
+    [call] = envIn.since(start);
+    assert.equal(call.headers.Authorization, undefined); assert.equal(call.headers['X-BT-Admin-Console'], '1');
+    assert.equal(body(call).actedBy, undefined, 'acting-as label not sent while signed in');
+    const sessionUser = (await users.listUsers()).find(u => u.username === 'session.user');
+    assert.ok(sessionUser);
+    assert.equal((await db.query("SELECT created_by FROM local_users WHERE username='session.user'")).rows[0].created_by, 'seeded.user');
+    const sessionAudit = (await db.query("SELECT actor_label, auth_method, actor_user_id FROM local_user_admin_audit WHERE action='create' AND target_username='session.user'")).rows[0];
+    assert.deepEqual({ ...sessionAudit }, { actor_label: 'seeded.user', auth_method: 'session', actor_user_id: seeded.id });
+    checkIsolation(envIn);
+    start = envIn.calls.length;
+    envIn.tab('settings'); envIn.click('signout'); await settle(envIn);
+    assert.deepEqual(envIn.since(start).map(c => `${c.method} ${c.url}`), ['POST /auth/logout', 'GET /admin/session']);
+    assert.equal(envIn.since(start)[0].headers['X-BT-Admin-Console'], '1');
+    assert.equal(envIn.$('chip-session').textContent, 'Not signed in');
+    assert.match(envIn.$('signin-message').textContent, /every BizTech app/);
+    assert.equal(envIn.$('signin-form').hidden, false); assert.equal(envIn.$('acting-form').hidden, false);
+    console.log('PASS: console sign-in lists and creates users with no token, sends the console header, ignores the acting-as label, and signs out');
+
+    // A session 401 ends the sign-in but keeps a saved token.
+    const envEnd = await boot({ responder: viaBrowser(closed), session: new FakeStorage({ [KEYS.admin]: ADMIN }) });
+    envEnd.tab('settings'); envEnd.type('signin-username', 'seeded.user'); envEnd.type('signin-password', 'seeded-password-123');
+    envEnd.submit('signin-form'); await settle(envEnd);
+    assert.equal(envEnd.$('signin-message').textContent, 'Signed in as seeded.user.');
+    assert.equal(envEnd.$('signin-password').value, '');
+    await users.updateUser(seeded.id, { isActive: false });
+    envEnd.tab('users'); await settle(envEnd);
+    const refused = envEnd.calls.filter(c => c.url === '/admin/users').at(-1);
+    assert.equal(refused.headers.Authorization, undefined);
+    assert.match(envEnd.$('toast-text').textContent, /no longer accepted/);
+    assert.equal(envEnd.session.getItem(KEYS.admin), ADMIN, 'session 401 keeps the saved token');
+    assert.equal(envEnd.$('chip-session').textContent, 'Not signed in');
+    await users.updateUser(seeded.id, { isActive: true });
+    console.log('PASS: a session 401 returns the console to signed out and keeps the saved token');
+
+    // Cookie not kept (wrong host) is explained.
+    const envDrop = await boot({ responder: viaBrowser(closed, { keepCookies: false }) });
+    envDrop.tab('settings'); envDrop.type('signin-username', 'seeded.user'); envDrop.type('signin-password', 'seeded-password-123');
+    envDrop.submit('signin-form'); await settle(envDrop);
+    assert.match(envDrop.$('signin-message').textContent, /did not keep the session cookie.*biztechro\.com/);
+    assert.equal(envDrop.$('chip-session').textContent, 'Not signed in');
+    console.log('PASS: a sign-in whose cookie the browser did not keep is explained');
 
     // Mode detection: Entra document, and unavailable document/health.
     const entra = createRequestHandler(unavailable, loadConfig({ ...environment, LOCAL_LOGIN: 'false' }), unavailable);
     const envEntra = await boot({ responder: viaHandler(entra) });
     assert.equal(envEntra.$('mode-status').textContent, 'Microsoft Entra');
+    assert.equal(envEntra.$('session-unavailable').textContent, 'Console sign-in needs local login mode. Use the user-admin token.');
     assert.deepEqual(envEntra.document.querySelectorAll('[data-mode]').filter(li => !li.hidden).map(li => li.querySelector('a').getAttribute('href')), ['/auth/login']);
     const sample = createOpenApiDocument(loadConfig(environment));
     const envSample = await boot({ responder: c => c.url === '/api/openapi.json' ? reply(200, sample) : reply(200, { status: 'ok' }) });

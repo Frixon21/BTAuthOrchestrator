@@ -24,7 +24,11 @@ Superseded by: CONTRACT-006 for HTTP creation authorization and the prohibition
 on self-service registration only; CONTRACT-009 for the self-service
 password-change exclusion and browser admin UI exclusion (password-reset
 page only); CONTRACT-010 for the browser admin UI exclusion (admin console
-at /admin/console). All other sections remain in force.
+at /admin/console); CONTRACT-011 for §4's token-only authorization of
+/admin/users* (an active local user's session is also accepted) and §6's actor
+recording on admin audit rows; CONTRACT-008 (OQ-8) for §5's input-channel
+sentence, in container first-boot mode only. All other sections remain in
+force.
 
 ## Purpose
 

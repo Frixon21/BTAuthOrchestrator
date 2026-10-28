@@ -490,7 +490,3 @@ All four of this task's acceptance criteria are met.
 ## Review
 
 Not reviewed.
-
-## Human acceptance
-
-Pending.

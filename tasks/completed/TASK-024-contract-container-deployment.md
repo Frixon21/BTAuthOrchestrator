@@ -238,7 +238,3 @@ to reach `review/` per `docs/workflow/lifecycle.md`.
 
 Not applicable (contract-designer task; Patrick reviews the contract
 directly).
-
-## Human acceptance
-
-Pending.

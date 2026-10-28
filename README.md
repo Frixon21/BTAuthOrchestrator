@@ -51,8 +51,9 @@ To enable public local account creation, set
 `ALLOW_NEW_LOCAL_LOGIN_CREATION=True` in `.env`, rebuild, and restart the
 service. Open `/auth/local-register` (for example,
 `http://localhost:3210/auth/local-register`), also linked from local sign-in.
-The form uses `POST /admin/users`. Missing or non-true values block creation
-on the server. Listing, editing, and deleting users still require the admin token.
+The form uses `POST /admin/users`. Missing or non-true values block public
+creation on the server. Listing, editing, and deleting users, and creating them
+while registration is off, require the admin token or a console sign-in.
 The registration page publicly shows local usernames and Active/Disabled status,
 including when creation is disabled. The full admin list API remains protected.
 
@@ -62,7 +63,9 @@ including when creation is disabled. The full admin list API remains protected.
 | `GET /auth/login` | Starts the OIDC flow: redirects to Entra with PKCE/state/nonce. |
 | `GET /auth/callback` | Entra's registered redirect URI; on success, sets the `bt_session` cookie. |
 | `GET /.well-known/jwks.json` | Public signing keys (current + retired), for any consuming app to verify tokens independently. |
-| `GET /admin/console` | Browser admin console for users and signing keys. Actions use the existing API with the dedicated bearer tokens. |
+| `GET /admin/console` | Browser admin console for users and signing keys. Sign in with a local account, or use the dedicated bearer tokens. |
+| `GET /admin/session` | Whether console sign-in is available and who is signed in. |
+| `POST /auth/logout` | Signs the browser out (clears `bt_session` for every BizTech app). Used by the console. |
 | `POST /admin/emergency-rotate-keys` | Break-glass "kill switch": immediately rotates the signing key and invalidates every outstanding session, org-wide. Bearer-token authenticated, separate from any user session. |
 
 ## Learn more
@@ -106,11 +109,14 @@ accounts. Existing sessions remain valid after either operation. See
 
 Open `/admin/console` (for example, `http://localhost:3210/admin/console`) in
 either login mode to manage local users and signing keys from a browser, with
-System, Light and Dark themes. Enter `LOCAL_USER_ADMIN_TOKEN` and
+System, Light and Dark themes. In local login mode, any active local user can
+sign in to manage users; sign-in is turned off while
+`ALLOW_NEW_LOCAL_LOGIN_CREATION=true`, and works only when the console is opened
+at a `biztechro.com` address, because the session cookie belongs to that
+domain. The tokens remain the fallback: enter `LOCAL_USER_ADMIN_TOKEN` and
 `EMERGENCY_ROTATION_TOKEN` separately in Settings. They stay in that tab's
-session storage until it closes, and Forget all removes them. Each token is sent
-only to its own endpoints. Creating users uses the public registration endpoint,
-so it works only while `ALLOW_NEW_LOCAL_LOGIN_CREATION=true`. Deleting a user
-requires typing its username, and emergency rotation requires typing `ROTATE`.
+session storage until it closes, and Forget all removes them. Emergency key
+rotation always needs its token. Deleting a user requires typing its username,
+and emergency rotation requires typing `ROTATE`.
 The console is not linked from public pages. See
 [development guidance](docs/DEVELOPMENT.md#browser-admin-console-contract-010).
