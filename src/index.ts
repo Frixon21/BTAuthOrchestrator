@@ -7,6 +7,7 @@ import { exportJWK, importSPKI, jwtVerify } from "jose";
 import { loadConfig, type Config } from "./config.js";
 import { createApiDocsHandler } from "./apiDocs.js";
 import { createAdminConsoleHandler } from "./adminConsole.js";
+import { createClientAddressResolver, formatTrustedProxies } from "./clientAddress.js";
 import { openDatabase, prepareDataDirectory, type DatabaseHandle } from "./database.js";
 import { createIpThrottle, type IpThrottle } from "./ipThrottle.js";
 import {
@@ -517,18 +518,6 @@ function extractTriggeredBy(bodyText: string): string | null {
   }
 }
 
-// CONTRACT-003 Interfaces: best-effort proxy-forwarded client address (first
-// X-Forwarded-For entry) when reachable via the configured reverse proxy,
-// otherwise the raw socket peer address. Audit metadata only.
-function extractSourceIp(request: IncomingMessage): string | null {
-  const forwardedFor = request.headers["x-forwarded-for"];
-  const forwardedValue = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
-  if (typeof forwardedValue === "string" && forwardedValue.trim() !== "") {
-    return forwardedValue.split(",")[0]!.trim();
-  }
-  return request.socket.remoteAddress ?? null;
-}
-
 function renderHtml(status: number, title: string, message: string): { status: number; headers: Record<string, string>; body: string } {
   return {
     status,
@@ -602,6 +591,9 @@ export function createRequestHandler(
   localUserStore: LocalUserStore,
 ): RequestListener {
   const handleApiDocs = createApiDocsHandler(config);
+  // CONTRACT-012 §2: the client address for every audit source_ip and the
+  // per-IP throttles. CF-Connecting-IP counts only from TRUSTED_PROXIES.
+  const extractSourceIp = createClientAddressResolver(config.trustedProxies);
   const handleAdminConsole = createAdminConsoleHandler();
   const handshakeStore = createHandshakeStore();
   const discoveryCache = new EntraDiscoveryCache();
@@ -1839,7 +1831,8 @@ async function start(): Promise<void> {
       `Starting BTAuthOrchestrator (node ${process.version}, pid ${process.pid}): ` +
         `port=${config.port} localLogin=${config.localLogin} ` +
         `allowNewLocalLoginCreation=${config.allowNewLocalLoginCreation} ` +
-        `issuer=${config.issuer} dataDir=${config.pgliteDataDir}`,
+        `issuer=${config.issuer} dataDir=${config.pgliteDataDir} ` +
+        `trustedProxies=${formatTrustedProxies(config.trustedProxies)}`,
     );
     await prepareDataDirectory(config.pgliteDataDir);
     databaseHandle = await openDatabase(config.pgliteDataDir);

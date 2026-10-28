@@ -27,8 +27,9 @@ page only); CONTRACT-010 for the browser admin UI exclusion (admin console
 at /admin/console); CONTRACT-011 for §4's token-only authorization of
 /admin/users* (an active local user's session is also accepted) and §6's actor
 recording on admin audit rows; CONTRACT-008 (OQ-8) for §5's input-channel
-sentence, in container first-boot mode only. All other sections remain in
-force.
+sentence, in container first-boot mode only; CONTRACT-012 for how
+`source_ip` is derived and which address §3's per-IP throttle counts. All
+other sections remain in force.
 
 ## Purpose
 

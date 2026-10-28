@@ -16,7 +16,10 @@ Supersedes: CONTRACT-007 (in full, on approval; see "Relationship to
 CONTRACT-007" below and ADR-001). Pending Open question OQ-8: may also
 supersede the input-channel sentence of CONTRACT-005 §5, for the container
 first-boot path only.
-Superseded by:
+Superseded by: CONTRACT-012 for the reverse-proxy actor, the Preconditions
+bullet and Interfaces "Ingress" line naming the reverse proxy, §8, the Caddy
+scope exclusions, OQ-9's deferral and Resolved decision #21 (Cloudflare
+Tunnel replaces Caddy). All other sections remain in force.
 
 ## Purpose
 

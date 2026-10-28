@@ -157,6 +157,30 @@ attempt (success or failure) writes one row to `local_login_audit`,
 best-effort — a malformed request (missing/invalid body) is rejected `400`
 before any lookup, hashing, or audit write occurs.
 
+#### Client address and `TRUSTED_PROXIES` (CONTRACT-012, TASK-029)
+
+The "source IP" used by the per-IP throttles and every `source_ip` audit
+column comes from `createClientAddressResolver` in `src/clientAddress.ts`:
+
+- With `TRUSTED_PROXIES` unset (the default), it is the connection's own peer
+  address. `X-Forwarded-For` and `CF-Connecting-IP` are ignored, so a client
+  cannot pick its own address.
+- With `TRUSTED_PROXIES` set to comma-separated addresses or CIDR ranges, a
+  request whose peer is inside them may supply a single valid
+  `CF-Connecting-IP`, which then becomes the client address. A missing,
+  repeated or malformed header falls back to the peer address.
+  `X-Forwarded-For` is never read.
+- IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) are reported as plain IPv4.
+- An invalid entry stops startup with `TRUSTED_PROXIES (invalid entry "...")`.
+  The startup log line shows the trusted ranges (`trustedProxies=none` when
+  unset).
+
+Behind the Cloudflare Tunnel, set it to the pinned subnet of the compose
+network the app shares with `cloudflared`, and keep that network to those two
+containers with no published host port. Otherwise a client could forge
+`CF-Connecting-IP` from a trusted address. Validate with
+`node scripts/test-trusted-proxies.js`.
+
 #### Local password change and admin reset (CONTRACT-009)
 
 With `LOCAL_LOGIN=true`, open `/auth/local-change-password` (also linked from

@@ -1,3 +1,5 @@
+import { parseTrustedProxies, type TrustedProxyRange } from "./clientAddress.js";
+
 // CONTRACT-005 §10: TENANT_ID/CLIENT_ID are required only when
 // LOCAL_LOGIN=false. This list is the set of variables required
 // unconditionally, regardless of LOCAL_LOGIN's value; TENANT_ID/CLIENT_ID
@@ -43,6 +45,8 @@ export interface Config {
   localLoginLockoutMinutes: number;
   localLoginIpThrottleMaxAttempts: number;
   localLoginIpThrottleWindowMinutes: number;
+  // CONTRACT-012 §3: optional; empty means forwarded headers are ignored.
+  trustedProxies: TrustedProxyRange[];
 }
 
 function normalizeLocalLoginFlag(raw: string | undefined): "true" | "false" | undefined {
@@ -172,6 +176,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): Config {
     invalid,
   );
 
+  const trustedProxies = parseTrustedProxies(environment.TRUSTED_PROXIES, invalid);
+
   if (missing.length > 0 || invalid.length > 0) {
     const details = [
       missing.length > 0
@@ -205,5 +211,6 @@ export function loadConfig(environment: NodeJS.ProcessEnv): Config {
     localLoginLockoutMinutes,
     localLoginIpThrottleMaxAttempts,
     localLoginIpThrottleWindowMinutes,
+    trustedProxies,
   };
 }

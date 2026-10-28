@@ -9,8 +9,9 @@ on — `rotateSigningKey`), CONTRACT-001 (defines the `bt_session` cookie this
 contract's mechanism deliberately does **not** accept as a credential)
 Related ADRs: none
 Superseded by: CONTRACT-010 for the "UX expectations" statement that no
-browser-facing UI is provided for the emergency rotation trigger only. All
-other sections remain in force.
+browser-facing UI is provided for the emergency rotation trigger only;
+CONTRACT-012 for how `source_ip` is derived. All other sections remain in
+force.
 
 ## Purpose
 

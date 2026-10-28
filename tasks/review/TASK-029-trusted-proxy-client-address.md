@@ -1,12 +1,12 @@
 # TASK-029: Trusted-proxy client address for Cloudflare Tunnel
 
 Owner role: Implementer
-Assigned agent: TBD
+Assigned agent: Claude
 Proposed by: Patrick Moon
 Proposed date: 2026-10-28
 Approved by: Patrick Moon
 Approved date: 2026-10-20
-Related contracts: CONTRACT-012 (Proposed; §2-§3 are this task's
+Related contracts: CONTRACT-012 (Approved 2026-10-28; §2-§3 are this task's
 behavior), CONTRACT-008 (its OQ-9 deferred this work; it called the
 follow-up "TASK-026", a number since used for the password-change task),
 CONTRACT-003 and CONTRACT-005 (`source_ip` and the per-IP throttle)
@@ -106,14 +106,62 @@ through-the-tunnel check belongs to TASK-025.
 
 ## Blocker
 
-Waiting on Patrick's approval of CONTRACT-012. Its open questions were all
-decided on 2026-10-28: forwarded headers are ignored unless
-`TRUSTED_PROXIES` is set (OQ-1), and only `CF-Connecting-IP` is read
-(OQ-2).
+None. CONTRACT-012 was approved on 2026-10-28: forwarded headers are
+ignored unless `TRUSTED_PROXIES` is set (OQ-1), and only `CF-Connecting-IP`
+is read (OQ-2).
 
 ## Implementation handoff
 
-Not started.
+Completed 2026-10-28 against CONTRACT-012 §2-§3.
+
+### Changes
+
+- New `src/clientAddress.ts`: `parseTrustedProxies` (validation, reporting
+  each bad entry), `createClientAddressResolver` (the §2 rule, using Node's
+  built-in `net.BlockList` and `net.isIP`; no new dependency),
+  `normalizeAddress` and `formatTrustedProxies`.
+- `src/config.ts`: optional `TRUSTED_PROXIES` parsed into
+  `config.trustedProxies`; a bad entry fails startup through the existing
+  "invalid environment variable(s)" error.
+- `src/index.ts`: the old module-level `extractSourceIp` (first
+  `X-Forwarded-For` entry from any peer) is replaced by a per-handler
+  resolver with the same name and signature, so all nine call sites
+  (login, password change, admin audit, emergency rotation) are unchanged.
+  The startup log line adds `trustedProxies=`.
+- `.env.example` and `docs/DEVELOPMENT.md` document the setting and the new
+  default.
+- New `scripts/test-trusted-proxies.js`.
+- `scripts/test-local-password-change.js` set each simulated client's
+  address through `X-Forwarded-For`, which is now ignored by design; it now
+  sets the connection's peer address instead. Its assertions are unchanged.
+
+### Validation
+
+`npm run build`, then all six test scripts pass:
+`test-trusted-proxies.js`, `test-console-sign-in.js`,
+`test-admin-console.js`, `test-api-docs.js`,
+`test-local-password-change.js`, `test-local-registration.js`. The new
+script covers each CONTRACT-012 Validation requirement for handler tests:
+every §2 row (unset, untrusted peer with forged headers, trusted peer with
+IPv4 and IPv6 values, missing/malformed/repeated header, mapped addresses,
+the range boundary), startup validation for ten kinds of bad entry, separate
+throttling of two clients behind the connector, a forged header not escaping
+the throttle without `TRUSTED_PROXIES`, and the derived address in login,
+admin and rotation audit rows. The through-the-tunnel check belongs to
+TASK-025.
+
+### Implementation judgment calls
+
+1. **Repeated `CF-Connecting-IP`.** Node joins repeated headers into one
+   comma-separated string, which fails the IP check, so the peer address is
+   used, as §2 step 5 requires. An array value is also treated as repeated.
+2. **IPv4-mapped entries in `TRUSTED_PROXIES`** (`::ffff:a.b.c.d`) are
+   normalized to IPv4 like peer addresses.
+3. **IPv6 values** are kept as written after trimming (not re-compressed),
+   so the same client could appear in two spellings only if Cloudflare
+   changed its formatting.
+4. **A peer that is not an IP literal** (not expected from Node) is used as
+   is, as before.
 
 ## Review
 

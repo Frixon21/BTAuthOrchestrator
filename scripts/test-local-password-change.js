@@ -26,7 +26,7 @@ const newPassword = 'replacement-password-456';
 const change = { username: ' Test.User ', currentPassword: oldPassword, newPassword };
 async function request(handler, method, url, body, headers = json, ip = '127.0.0.1') {
   const req = Readable.from(body === undefined ? [] : [typeof body === 'string' ? body : JSON.stringify(body)]);
-  Object.assign(req, { method, url, headers: { ...headers, 'x-forwarded-for': ip }, socket: {} });
+  Object.assign(req, { method, url, headers, socket: { remoteAddress: ip } });
   let response;
   await handler(req, {
     writeHead(status, headers) { response = { status, headers }; },
@@ -158,7 +158,7 @@ async function main() {
       assert.deepEqual(calls, saved); assert.equal((await auditRows()).length, audits); assert.equal((await loginRows()).length, logins);
       assert.equal((await request(h, 'POST', second, body)).status, 401);
       // Throttled requests must not even consume the stream.
-      await h({ method: 'POST', url: first, headers: { 'x-forwarded-for': '127.0.0.1' }, socket: {}, [Symbol.asyncIterator]() { throw Error('body read'); } }, { writeHead(status) { assert.equal(status, 429); }, end() {} });
+      await h({ method: 'POST', url: first, headers: {}, socket: { remoteAddress: '127.0.0.1' }, [Symbol.asyncIterator]() { throw Error('body read'); } }, { writeHead(status) { assert.equal(status, 429); }, end() {} });
     }
     const audits = (await auditRows()).filter(row => row.actor_label === 'self-service');
     assert.equal(audits.length, 17, 'exactly one admin audit row per validated change attempt');
