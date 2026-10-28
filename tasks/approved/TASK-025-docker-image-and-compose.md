@@ -4,8 +4,8 @@ Owner role: Implementer
 Assigned agent: TBD
 Proposed by: Patrick Moon
 Proposed date: 2026-10-20
-Approved by:
-Approved date:
+Approved by: Patrick Moon
+Approved date: 2026-10-20
 Related contracts: CONTRACT-008 (Approved 2026-10-28; supersedes
 CONTRACT-007, now Retired); CONTRACT-011 (console sign-in, which works only
 at a `biztechro.com` host and is therefore first usable through this

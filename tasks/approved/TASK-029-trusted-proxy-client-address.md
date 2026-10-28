@@ -4,8 +4,8 @@ Owner role: Implementer
 Assigned agent: TBD
 Proposed by: Patrick Moon
 Proposed date: 2026-10-28
-Approved by:
-Approved date:
+Approved by: Patrick Moon
+Approved date: 2026-10-20
 Related contracts: CONTRACT-012 (Proposed; §2-§3 are this task's
 behavior), CONTRACT-008 (its OQ-9 deferred this work; it called the
 follow-up "TASK-026", a number since used for the password-change task),
