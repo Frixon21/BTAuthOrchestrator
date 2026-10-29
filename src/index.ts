@@ -1,3 +1,5 @@
+import { createPasswordRecovery, type PasswordRecovery } from "./passwordRecovery.js";
+import { createRecoveryHandler } from "./recoveryRoutes.js";
 import { generateKeyPair, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type RequestListener } from "node:http";
 import { promisify } from "node:util";
@@ -107,6 +109,7 @@ const LOCAL_LOGIN_FORM_HTML = `<!doctype html>
 <body>
 <h1>Local sign-in</h1>
 <p><a href="/auth/local-register">Create an account</a></p>
+<p><a href="/auth/forgot-password">Forgot password?</a></p>
 <p><a href="/auth/local-change-password">Change password</a></p>
 <form id="login-form">
   <div>
@@ -589,12 +592,14 @@ export function createRequestHandler(
   secretsStore: SecretsStore,
   config: Config,
   localUserStore: LocalUserStore,
+  recovery?: PasswordRecovery,
 ): RequestListener {
   const handleApiDocs = createApiDocsHandler(config);
   // CONTRACT-012 §2: the client address for every audit source_ip and the
   // per-IP throttles. CF-Connecting-IP counts only from TRUSTED_PROXIES.
   const extractSourceIp = createClientAddressResolver(config.trustedProxies);
   const handleAdminConsole = createAdminConsoleHandler();
+  const handleRecovery = createRecoveryHandler(config, recovery, extractSourceIp);
   const handshakeStore = createHandshakeStore();
   const discoveryCache = new EntraDiscoveryCache();
   const ipThrottle: IpThrottle = createIpThrottle(
@@ -1045,7 +1050,7 @@ export function createRequestHandler(
       const signingKey = await secretsStore.getCurrentSigningKey();
       const mintedAt = new Date();
       const token = await mintSessionToken(
-        { sub: userRow!.id, email: userRow!.email, upn: userRow!.username },
+        { sub: userRow!.id, email: userRow!.email, upn: userRow!.username, btv: userRow!.recoveryVersion },
         signingKey,
         config.issuer,
         mintedAt,
@@ -1173,6 +1178,7 @@ export function createRequestHandler(
   ): Promise<{ id: string; username: string } | "session_invalid" | "session_user_not_active"> {
     const keys = await secretsStore.listPublishableSigningKeys();
     let subject: string;
+    let recoveryVersion: unknown;
     try {
       const { payload } = await jwtVerify(
         token,
@@ -1185,9 +1191,11 @@ export function createRequestHandler(
       );
       if (typeof payload.sub !== "string" || payload.sub === "") return "session_invalid";
       subject = payload.sub;
+      recoveryVersion = payload.btv;
     } catch {
       return "session_invalid";
     }
+    if (recovery && !await recovery.acceptSession(subject, recoveryVersion)) return "session_invalid";
     const user = await localUserStore.getUserById(subject);
     if (user === undefined || !user.isActive) return "session_user_not_active";
     return { id: user.id, username: user.username };
@@ -1624,6 +1632,7 @@ export function createRequestHandler(
   }
 
   return async (request, response) => {
+    if (await handleRecovery(request, response)) return;
     if (await handleApiDocs(request, response)) return;
     if (await handleAdminConsole(request, response)) return;
     if (config.localLogin === false && request.method === "GET" && request.url === "/auth/login") {
@@ -1832,15 +1841,16 @@ async function start(): Promise<void> {
         `port=${config.port} localLogin=${config.localLogin} ` +
         `allowNewLocalLoginCreation=${config.allowNewLocalLoginCreation} ` +
         `issuer=${config.issuer} dataDir=${config.pgliteDataDir} ` +
-        `trustedProxies=${formatTrustedProxies(config.trustedProxies)}`,
+        `trustedProxies=${formatTrustedProxies(config.trustedProxies)} passwordRecovery=${config.recovery ? "enabled" : "disabled"}`,
     );
     await prepareDataDirectory(config.pgliteDataDir);
     databaseHandle = await openDatabase(config.pgliteDataDir);
     const secretsStore = createSecretsStore(databaseHandle.database, config.dbEncryptionKey);
     const localUserStore = createLocalUserStore(databaseHandle.database);
-    const server = createServer(withRequestMonitoring(createRequestHandler(secretsStore, config, localUserStore)));
+    const recovery = createPasswordRecovery(databaseHandle.database, config.recovery);
+    const server = createServer(withRequestMonitoring(createRequestHandler(secretsStore, config, localUserStore, recovery)));
 
-    server.listen(config.port, () => {
+    server.listen(config.port, config.listenHost, () => {
       console.log(`BTAuthOrchestrator listening on port ${config.port}`);
     });
 
@@ -1859,6 +1869,7 @@ async function start(): Promise<void> {
           else resolve();
         });
       });
+      await recovery.drain();
       await databaseHandle?.close();
     };
     const shutdownFromSignal = async (): Promise<void> => {

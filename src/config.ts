@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { parseTrustedProxies, type TrustedProxyRange } from "./clientAddress.js";
 
 // CONTRACT-005 §10: TENANT_ID/CLIENT_ID are required only when
@@ -28,8 +29,12 @@ const DEFAULT_LOCAL_LOGIN_LOCKOUT_MINUTES = 15;
 const DEFAULT_LOCAL_LOGIN_IP_THROTTLE_MAX_ATTEMPTS = 20;
 const DEFAULT_LOCAL_LOGIN_IP_THROTTLE_WINDOW_MINUTES = 5;
 
+import { loadRecoveryConfig, type RecoveryConfig } from "./passwordRecovery.js";
+
 export interface Config {
+  recovery?: RecoveryConfig;
   port: number;
+  listenHost?: string;
   pgliteDataDir: string;
   dbEncryptionKey: string;
   cookieSecure: string;
@@ -177,6 +182,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv): Config {
   );
 
   const trustedProxies = parseTrustedProxies(environment.TRUSTED_PROXIES, invalid);
+  const listenHost = environment.LISTEN_HOST?.trim() || undefined;
+  if (listenHost && listenHost !== "localhost" && isIP(listenHost) === 0) invalid.push("LISTEN_HOST (must be an IP address or localhost)");
 
   if (missing.length > 0 || invalid.length > 0) {
     const details = [
@@ -191,8 +198,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv): Config {
     throw new Error(`Configuration error: ${details.join("; ")}`);
   }
 
+  const recovery = loadRecoveryConfig(environment);
   return {
+    recovery,
     port,
+    listenHost,
     pgliteDataDir: environment.PGLITE_DATA_DIR!.trim(),
     dbEncryptionKey: environment.DB_ENCRYPTION_KEY!.trim(),
     cookieSecure: environment.COOKIE_SECURE!.trim(),

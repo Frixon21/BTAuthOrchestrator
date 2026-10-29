@@ -105,6 +105,16 @@ ALTER TABLE local_user_admin_audit
   ADD COLUMN IF NOT EXISTS auth_method text CHECK (auth_method IN ('token', 'session', 'public'));
 ALTER TABLE local_user_admin_audit
   ADD COLUMN IF NOT EXISTS actor_user_id text;
+
+ALTER TABLE local_users ADD COLUMN IF NOT EXISTS recovery_version integer NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS password_recovery (
+  user_id text PRIMARY KEY REFERENCES local_users(id) ON DELETE CASCADE,
+  token_hash text UNIQUE NOT NULL,
+  email text NOT NULL,
+  password_snapshot bytea NOT NULL,
+  expires_at timestamptz NOT NULL,
+  requested_at timestamptz NOT NULL DEFAULT now()
+);
 `;
 
 export interface DatabaseHandle {

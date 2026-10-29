@@ -27,6 +27,7 @@ export interface LocalUserRow {
   isActive: boolean;
   failedLoginAttempts: number;
   lockedUntil: Date | null;
+  recoveryVersion?: number;
 }
 
 export type LocalLoginFailureReason = "unknown_username" | "bad_password" | "disabled" | "locked";
@@ -173,6 +174,7 @@ interface LocalUserDbRow {
   is_active: boolean;
   failed_login_attempts: number;
   locked_until: string | null;
+  recovery_version: number;
 }
 
 export function createLocalUserStore(database: PGlite): LocalUserStore {
@@ -180,7 +182,7 @@ export function createLocalUserStore(database: PGlite): LocalUserStore {
     const result = await database.query<LocalUserDbRow>(
       `SELECT id, username, email, password_hash, password_salt, password_algorithm,
               password_cost_n, password_block_size_r, password_parallelization_p,
-              password_key_length, is_active, failed_login_attempts, locked_until
+              password_key_length, is_active, failed_login_attempts, locked_until, recovery_version
        FROM local_users
        WHERE username = $1`,
       [normalizedUsername],
@@ -188,6 +190,7 @@ export function createLocalUserStore(database: PGlite): LocalUserStore {
     const row = result.rows[0];
     if (row === undefined) return undefined;
     return {
+      recoveryVersion: row.recovery_version,
       id: row.id,
       username: row.username,
       email: row.email,
@@ -374,6 +377,12 @@ export function createLocalUserStore(database: PGlite): LocalUserStore {
          RETURNING id, username, email, is_active, created_at, updated_at`,
         values,
       );
+      // Email/password changes and disable operations permanently retire outstanding
+      // links in the same transaction. A later email revert or re-enable must not
+      // revive a link sent under an earlier account state. Existing JWT policy is unchanged.
+      if (input.email !== undefined || input.passwordHash !== undefined || input.isActive === false) {
+        await transaction.query('DELETE FROM password_recovery WHERE user_id=$1', [id]);
+      }
       return { record: toPublicRecord(result.rows[0]!), changedFields };
     });
   }

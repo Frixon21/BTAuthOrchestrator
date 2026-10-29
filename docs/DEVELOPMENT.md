@@ -634,3 +634,7 @@ Document required test levels, coverage expectations, fixtures, and manual check
 ## Security and privacy
 
 Document secrets handling, data classification, dependency, and reporting rules.
+
+### Email password recovery
+
+See [configuration, security, offline JWT limits, migrations, rollback and isolated tests](PASSWORD_RECOVERY.md). Run `npm run test:recovery` for the synthetic recovery suite. No lint command is configured in this repository; `npm run build` performs TypeScript checking.

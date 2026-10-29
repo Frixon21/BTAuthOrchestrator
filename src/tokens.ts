@@ -4,6 +4,7 @@ export interface SessionIdentityClaims {
   sub: string;
   email: string;
   upn: string;
+  btv?: number;
 }
 
 export interface TokenSigningKey {
@@ -28,7 +29,7 @@ export async function mintSessionToken(
   const exp = nextLocalMidnightEpochSeconds(nowDate);
   const privateKey = await importPKCS8(signingKey.privateKeyPem, "RS256");
 
-  return new SignJWT({ sub: claims.sub, email: claims.email, upn: claims.upn })
+  return new SignJWT({ sub: claims.sub, email: claims.email, upn: claims.upn, ...(claims.btv === undefined ? {} : { btv: claims.btv }) })
     .setProtectedHeader({ alg: "RS256", kid: signingKey.kid })
     .setIssuedAt(iat)
     .setExpirationTime(exp)

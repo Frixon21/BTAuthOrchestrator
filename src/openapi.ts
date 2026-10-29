@@ -44,6 +44,20 @@ export function createOpenApiDocument(config: Config) {
     "/admin/emergency-rotate-keys": { post: { tags: ["Signing keys"], summary: "Revoke the current signing key and generate a new one", description: "Invalidates tokens signed with the previous key for verifiers using fresh JWKS. Uses a dedicated emergency token; a session cookie does not authorize this operation. triggeredBy is an unverified caller label. Optional malformed body is ignored.", security: [{ EmergencyRotationToken: [] }], requestBody: body(object({ triggeredBy: string }), false), responses: { 200: json("Rotated", object({ status: { type: "string", enum: ["rotated"] }, previousKid: string, newKid: string, rotatedAt: { type: "string", format: "date-time" } }, ["status", "previousKid", "newKid", "rotatedAt"])), ...errors(401, 500) } } },
   };
   if (localMode) {
+    paths["/auth/forgot-password"] = {
+      get: { tags: ["Authentication"], summary: "Email password recovery form", responses: { 200: html("Recovery page"), 503: html("Recovery unavailable: mail configuration is absent") } },
+      post: { tags: ["Authentication"], summary: "Request a password reset email",
+        description: "Generic confirmation for known, unknown, disabled, throttled accounts and delivery failures. Trusted origin and JSON required for browser POST. Delivery requires all three server-side recovery settings; absent configuration returns 503 for every account.",
+        requestBody: body(object({ email: { type: "string", format: "email", maxLength: 254 } }, ["email"])),
+        responses: { 200: json("Generic confirmation", object({message:string})), ...errors(400,403,415,503) } },
+    };
+    paths["/auth/reset-password"] = {
+      get: { tags: ["Authentication"], summary: "Reset password form; never consumes a token", responses: { 200: html("Reset page; token supplied in URL fragment") } },
+      post: { tags: ["Authentication"], summary: "Consume a single-use password reset link",
+        description: "Expires after 30 minutes. Password update and token consumption are atomic. Revokes BTAuth console sessions; existing offline JWTs remain verifiable until expiry. No automatic sign-in.",
+        requestBody: body(object({ token:string, newPassword:{type:"string",format:"password",minLength:12,maxLength:1024} }, ["token","newPassword"])),
+        responses: { 200:json("Password reset",object({message:string})), ...errors(400,403,415,429,503) } },
+    };
     paths["/auth/local-change-password"] = {
       get: { tags: ["Authentication"], summary: "Local password change form", responses: { 200: html("Password change page") } },
       post: { tags: ["Authentication"], summary: "Change a local password using the current password",

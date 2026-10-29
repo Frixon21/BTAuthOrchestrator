@@ -105,6 +105,10 @@ the existing admin API. Resets clear lockout but do not re-enable disabled
 accounts. Existing sessions remain valid after either operation. See
 [development guidance](docs/DEVELOPMENT.md) for behavior and validation.
 
+## Email password recovery
+
+Local sign-in includes **Forgot password?**, which emails a single-use reset link when server-only Resend settings are configured. See [setup, security, migration and rollback](docs/PASSWORD_RECOVERY.md). For normal use, add RESEND_API_KEY, PASSWORD_RESET_FROM and PASSWORD_RESET_PUBLIC_ORIGIN to the same server-side .env as the other tokens, then build and use the existing start.sh on Linux/systemd (or npm start for direct Node startup). start.sh loads that same .env. No preview launcher is required. Missing recovery configuration returns an explicit unavailable response; partial configuration fails startup. Existing operator reset tools remain available. Email recovery revokes BTAuth console sessions; offline consumers still accept previously issued JWTs until their existing expiry at next local midnight. Signup email verification is a separate feature and is unchanged.
+
 ## Admin console
 
 Open `/admin/console` (for example, `http://localhost:3210/admin/console`) in
